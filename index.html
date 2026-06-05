@@ -965,7 +965,7 @@
 
     <!-- Footer -->
     <footer>
-      <p>识笺 · Scannote — 本地PDF内容识别与命名工具</p>
+      <p>识笺 · Scannote</p>
     </footer>
   </div>
 
@@ -1347,6 +1347,8 @@
     async function extractTextFromPDF(file) {
       try {
         const text = await extractRawTextFromPDF(file);
+        console.log('[识笺] 提取的文本:', text.slice(0, 200));
+        
         const typedarray = new Uint8Array(await file.arrayBuffer());
         const pdf = await pdfjsLib.getDocument(typedarray).promise;
 
@@ -1354,6 +1356,7 @@
         let potentialTitle = '';
         try {
           const metadata = await pdf.getMetadata();
+          console.log('[识笺] PDF元数据:', metadata.info);
           if (metadata.info?.Title) {
             potentialTitle = metadata.info.Title;
           }
@@ -1361,6 +1364,7 @@
 
         // Extract title from first few lines
         const lines = text.split('\n').filter(l => l.trim());
+        console.log('[识笺] 前5行文本:', lines.slice(0, 5));
         let title = potentialTitle || lines.slice(0, 5).join(' ').trim();
 
         // If still no title, try to extract from filename
@@ -1369,8 +1373,10 @@
           title = filenameWithoutExt;
         }
 
+        console.log('[识笺] 最终标题:', title);
         return truncateChinese(title, 10) || '未命名';
       } catch (err) {
+        console.error('[识笺] 本地识别失败:', err);
         // Fallback to filename
         const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
         return truncateChinese(filenameWithoutExt, 10) || '未命名';
@@ -1408,6 +1414,10 @@
       const truncatedText = promptText.slice(0, 1000);
 
       try {
+        console.log('[识笺] 发送API请求到:', endpoint);
+        console.log('[识笺] 请求模型:', model || 'deepseek-v4-flash');
+        console.log('[识笺] 发送内容:', truncatedText.slice(0, 500));
+        
         const response = await fetch(endpoint, {
           method: 'POST',
           headers: {
@@ -1437,6 +1447,8 @@
           }
 
         const data = await response.json();
+        console.log('[识笺] API响应:', JSON.stringify(data).slice(0, 500));
+        
         let title = data.choices?.[0]?.message?.content?.trim() || '';
         
         // Clean up the title
