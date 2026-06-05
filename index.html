@@ -1,0 +1,1575 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>识笺 - Scannote</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #FFFFFF;
+      --text-primary: #1A1A1A;
+      --text-secondary: #666666;
+      --border: #E5E5E5;
+      --accent: #2563EB;
+      --accent-light: #EFF6FF;
+      --success: #10B981;
+      --success-light: #ECFDF5;
+      --warning: #F59E0B;
+      --warning-light: #FFFBEB;
+      --error: #EF4444;
+      --error-light: #FEF2F2;
+      --transition: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    body {
+      font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 24px 0 32px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+
+    .logo {
+      width: 40px;
+      height: 40px;
+      background: var(--text-primary);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .logo svg {
+      width: 24px;
+      height: 24px;
+      fill: white;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .brand h1 {
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.5px;
+    }
+
+    .brand span {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    /* Mode Tabs */
+    .mode-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0;
+    }
+
+    .mode-tab {
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: none;
+      border: none;
+      cursor: pointer;
+      position: relative;
+      transition: var(--transition);
+    }
+
+    .mode-tab:hover {
+      color: var(--text-primary);
+    }
+
+    .mode-tab.active {
+      color: var(--accent);
+    }
+
+    .mode-tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 2px 2px 0 0;
+    }
+
+    /* Panels */
+    .panel {
+      display: none;
+      animation: fadeIn var(--transition);
+    }
+
+    .panel.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Settings Panel */
+    .settings-panel {
+      background: #FAFAFA;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+
+    .settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .settings-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .settings-toggle {
+      width: 20px;
+      height: 20px;
+      transition: var(--transition);
+    }
+
+    .settings-toggle.collapsed {
+      transform: rotate(-90deg);
+    }
+
+    .settings-content {
+      margin-top: 20px;
+      display: grid;
+      gap: 20px;
+      overflow: hidden;
+      transition: var(--transition);
+    }
+
+    .settings-content.collapsed {
+      margin-top: 0;
+      max-height: 0;
+      opacity: 0;
+    }
+
+    /* Form Elements */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+
+    .form-row-3 {
+      grid-template-columns: repeat(3, 1fr);
+    }
+
+    label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    input[type="url"],
+    select {
+      width: 100%;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text-primary);
+      transition: var(--transition);
+    }
+
+    input:focus,
+    select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-light);
+    }
+
+    input::placeholder {
+      color: #AAAAAA;
+    }
+
+    /* Toggle Switch */
+    .toggle-group {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .toggle-label {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .toggle-desc {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      background: #DDDDDD;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .toggle.active {
+      background: var(--accent);
+    }
+
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background: white;
+      border-radius: 50%;
+      transition: var(--transition);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    .toggle.active::after {
+      transform: translateX(20px);
+    }
+
+    /* Naming Rules */
+    .naming-rules {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .rule-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      transition: var(--transition);
+      cursor: default;
+    }
+
+    .rule-item.dragging {
+      opacity: 0.5;
+      background: var(--accent-light);
+      border-color: var(--accent);
+    }
+
+    .rule-item.dragover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+    }
+
+    .rule-handle {
+      color: #CCCCCC;
+      cursor: grab;
+      padding: 4px;
+    }
+
+    .rule-handle:active {
+      cursor: grabbing;
+    }
+
+    .rule-content {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .rule-label {
+      font-size: 14px;
+      font-weight: 500;
+      min-width: 80px;
+    }
+
+    .rule-preview {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-family: monospace;
+      background: #F5F5F5;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .rule-enabled {
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: var(--transition);
+    }
+
+    .rule-enabled.active {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .rule-enabled svg {
+      width: 12px;
+      height: 12px;
+      fill: white;
+      opacity: 0;
+      transition: var(--transition);
+    }
+
+    .rule-enabled.active svg {
+      opacity: 1;
+    }
+
+    .rule-custom {
+      width: 120px;
+    }
+
+    /* Preview */
+    .preview-box {
+      background: #F5F5F5;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    .preview-label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .preview-filename {
+      font-size: 16px;
+      font-weight: 500;
+      font-family: monospace;
+      word-break: break-all;
+    }
+
+    /* Drop Zone */
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 16px;
+      padding: 60px 40px;
+      text-align: center;
+      transition: var(--transition);
+      cursor: pointer;
+      background: #FAFAFA;
+    }
+
+    .drop-zone:hover,
+    .drop-zone.dragover {
+      border-color: var(--accent);
+      background: var(--accent-light);
+    }
+
+    .drop-zone.dragover {
+      transform: scale(1.01);
+    }
+
+    .drop-zone-icon {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 16px;
+      color: var(--text-secondary);
+      transition: var(--transition);
+    }
+
+    .drop-zone:hover .drop-zone-icon,
+    .drop-zone.dragover .drop-zone-icon {
+      color: var(--accent);
+    }
+
+    .drop-zone h3 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .drop-zone p {
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    /* File List */
+    .file-list {
+      margin-top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .file-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      background: #FAFAFA;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      transition: var(--transition);
+    }
+
+    .file-card:hover {
+      border-color: #DDDDDD;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    .file-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--error-light);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .file-icon svg {
+      width: 24px;
+      height: 24px;
+      fill: var(--error);
+    }
+
+    .file-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .file-original {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-new {
+      font-size: 14px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .file-new input {
+      flex: 1;
+      padding: 6px 10px;
+      font-size: 14px;
+      font-family: inherit;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      min-width: 0;
+    }
+
+    .file-new input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .file-status {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .file-status.processing {
+      background: var(--warning-light);
+      color: var(--warning);
+    }
+
+    .file-status.success {
+      background: var(--success-light);
+      color: var(--success);
+    }
+
+    .file-status.error {
+      background: var(--error-light);
+      color: var(--error);
+    }
+
+    .file-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: var(--transition);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-primary {
+      background: var(--text-primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #333333;
+    }
+
+    .btn-secondary {
+      background: var(--bg);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: #F5F5F5;
+    }
+
+    .btn-icon {
+      padding: 8px;
+      background: transparent;
+      border: 1px solid var(--border);
+    }
+
+    .btn-icon:hover {
+      background: #F5F5F5;
+      border-color: #DDDDDD;
+    }
+
+    .btn-icon svg {
+      width: 16px;
+      height: 16px;
+      fill: var(--text-secondary);
+    }
+
+    .btn-icon.download svg {
+      fill: var(--accent);
+    }
+
+    .btn-icon.delete svg {
+      fill: var(--error);
+    }
+
+    /* Email Panel */
+    .email-status {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: #FAFAFA;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #CCCCCC;
+    }
+
+    .status-dot.connected {
+      background: var(--success);
+      box-shadow: 0 0 0 4px var(--success-light);
+    }
+
+    .status-dot.connecting {
+      background: var(--warning);
+      animation: pulse 1s infinite;
+    }
+
+    .status-dot.error {
+      background: var(--error);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .email-status-info {
+      flex: 1;
+    }
+
+    .email-status-info strong {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .email-status-info p {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    /* Footer */
+    footer {
+      margin-top: 48px;
+      padding: 24px 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+
+    footer p {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 14px 20px;
+      background: var(--text-primary);
+      color: white;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: var(--transition);
+      z-index: 1000;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .toast.success {
+      background: var(--success);
+    }
+
+    .toast.error {
+      background: var(--error);
+    }
+
+    /* Hidden file input */
+    .hidden-input {
+      display: none;
+    }
+
+    /* Loading Spinner */
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .container {
+        padding: 16px;
+      }
+
+      .form-row,
+      .form-row-3 {
+        grid-template-columns: 1fr;
+      }
+
+      .drop-zone {
+        padding: 40px 20px;
+      }
+
+      .file-card {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .file-actions {
+        width: 100%;
+        justify-content: flex-end;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+      </div>
+      <div class="brand">
+        <h1>识笺</h1>
+        <span>Scannote</span>
+      </div>
+    </header>
+
+    <!-- Mode Tabs -->
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="email">邮箱模式</button>
+      <button class="mode-tab" data-mode="drag">拖拽模式</button>
+    </div>
+
+    <!-- Email Mode Panel -->
+    <div class="panel active" id="email-panel">
+      <div class="email-status" id="email-status">
+        <div class="status-dot" id="status-dot"></div>
+        <div class="email-status-info">
+          <strong id="status-title">未连接</strong>
+          <p id="status-desc">配置邮箱信息后开始监听</p>
+        </div>
+        <button class="btn btn-secondary" id="connect-btn">连接</button>
+      </div>
+
+      <div class="settings-panel">
+        <div class="settings-header" id="email-settings-header">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+            邮箱配置
+          </h3>
+          <svg class="settings-toggle" id="email-settings-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 9l-7 7-7-7"/>
+          </svg>
+        </div>
+        <div class="settings-content" id="email-settings-content">
+          <div class="form-row">
+            <div class="form-group">
+              <label>邮箱服务器</label>
+              <input type="text" id="email-server" placeholder="imap.example.com">
+            </div>
+            <div class="form-group">
+              <label>端口</label>
+              <input type="number" id="email-port" placeholder="993" value="993">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>邮箱地址</label>
+              <input type="text" id="email-user" placeholder="your@email.com">
+            </div>
+            <div class="form-group">
+              <label>密码/授权码</label>
+              <input type="password" id="email-pass" placeholder="••••••••">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>监听发件人（打印机邮箱）</label>
+            <input type="text" id="email-from" placeholder="printer@company.com">
+          </div>
+          <div class="form-group">
+            <label>检查间隔（秒）</label>
+            <input type="number" id="email-interval" value="60" min="30" max="600">
+          </div>
+          <button class="btn btn-primary" id="save-email-config">保存配置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drag Mode Panel -->
+    <div class="panel" id="drag-panel">
+      <div class="drop-zone" id="drop-zone">
+        <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+        </svg>
+        <h3>拖拽PDF文件到此处</h3>
+        <p>或点击选择文件</p>
+        <input type="file" class="hidden-input" id="file-input" accept=".pdf" multiple>
+      </div>
+      <div class="file-list" id="file-list"></div>
+    </div>
+
+    <!-- Common Settings -->
+    <div class="settings-panel">
+      <div class="settings-header" id="naming-settings-header">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+          命名规则
+        </h3>
+        <svg class="settings-toggle" id="naming-settings-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 9l-7 7-7-7"/>
+        </svg>
+      </div>
+      <div class="settings-content" id="naming-settings-content">
+        <div class="toggle-group">
+          <div>
+            <div class="toggle-label">识别模式</div>
+            <div class="toggle-desc">关闭则使用本地模式提取标题</div>
+          </div>
+          <div class="toggle" id="ai-mode-toggle"></div>
+        </div>
+
+        <div id="ai-config" style="display:none;">
+          <div class="form-group">
+            <label>API 端点</label>
+            <input type="url" id="api-endpoint" placeholder="https://api.openai.com/v1/chat/completions">
+          </div>
+          <div class="form-group">
+            <label>API Key</label>
+            <input type="password" id="api-key" placeholder="sk-••••••••••••••••">
+          </div>
+          <div class="form-group">
+            <label>模型</label>
+            <input type="text" id="api-model" placeholder="gpt-4o-mini" value="gpt-4o-mini">
+          </div>
+          <button class="btn btn-secondary" id="save-api-config">保存API配置</button>
+        </div>
+
+        <div class="naming-rules" id="naming-rules">
+          <div class="rule-item" data-rule="prefix">
+            <div class="rule-handle">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm8-12a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0z"/>
+              </svg>
+            </div>
+            <div class="rule-content">
+              <span class="rule-label">前缀</span>
+              <input type="text" class="rule-custom" id="prefix-value" value="扫描件" placeholder="扫描件">
+              <span class="rule-preview" id="prefix-preview">扫描件</span>
+            </div>
+            <div class="rule-enabled active" data-rule="prefix">
+              <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+          </div>
+
+          <div class="rule-item" data-rule="title">
+            <div class="rule-handle">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm8-12a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0z"/>
+              </svg>
+            </div>
+            <div class="rule-content">
+              <span class="rule-label">标题</span>
+              <span class="rule-preview" id="title-preview">[识别的标题]</span>
+            </div>
+            <div class="rule-enabled active" data-rule="title">
+              <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+          </div>
+
+          <div class="rule-item" data-rule="date">
+            <div class="rule-handle">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm8-12a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0zm0 6a2 2 0 11-4 0 2 2 0 014 0z"/>
+              </svg>
+            </div>
+            <div class="rule-content">
+              <span class="rule-label">日期</span>
+              <span class="rule-preview" id="date-preview">20250605</span>
+            </div>
+            <div class="rule-enabled active" data-rule="date">
+              <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="preview-box">
+          <div class="preview-label">预览文件名</div>
+          <div class="preview-filename" id="filename-preview">扫描件_文档标题_20250605.pdf</div>
+        </div>
+
+        <div class="form-group" style="margin-top: 16px;">
+          <label>保存位置</label>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="save-path" placeholder="默认保存到桌面" value="桌面" style="flex:1;">
+            <button class="btn btn-secondary" id="choose-path">选择</button>
+          </div>
+        </div>
+
+        <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px;">
+          <button class="btn btn-secondary" id="reset-naming">重置规则</button>
+          <button class="btn btn-primary" id="save-all-config">保存所有配置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+      <p>识笺 · Scannote — 本地PDF内容识别与命名工具</p>
+    </footer>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // Initialize PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    // State
+    const state = {
+      mode: 'email',
+      aiMode: false,
+      emailConnected: false,
+      emailCheckInterval: null,
+      files: [],
+      config: {
+        ai: {
+          enabled: false,
+          endpoint: '',
+          key: '',
+          model: 'gpt-4o-mini'
+        },
+        email: {
+          server: '',
+          port: 993,
+          user: '',
+          pass: '',
+          from: '',
+          interval: 60
+        },
+        naming: {
+          order: ['prefix', 'title', 'date'],
+          prefix: { enabled: true, value: '扫描件' },
+          title: { enabled: true },
+          date: { enabled: true }
+        },
+        savePath: '桌面'
+      }
+    };
+
+    // DOM Elements
+    const $ = id => document.getElementById(id);
+    const modeTabs = document.querySelectorAll('.mode-tab');
+    const panels = document.querySelectorAll('.panel');
+    const dropZone = $('drop-zone');
+    const fileInput = $('file-input');
+    const fileList = $('file-list');
+    const toast = $('toast');
+
+    // Utility Functions
+    function showToast(message, type = 'default') {
+      toast.textContent = message;
+      toast.className = 'toast show' + (type !== 'default' ? ' ' + type : '');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    function formatDate(date = new Date()) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}${m}${d}`;
+    }
+
+    function truncateChinese(text, maxChars = 10) {
+      let count = 0;
+      let result = '';
+      for (const char of text) {
+        if (/[\u4e00-\u9fa5]/.test(char)) count += 1;
+        else count += 0.5;
+        if (count > maxChars) break;
+        result += char;
+      }
+      return result;
+    }
+
+    // Preview filename
+    function updateFilenamePreview(title = '文档标题') {
+      const parts = [];
+      const { order, prefix, title: titleRule, date } = state.config.naming;
+
+      const ruleValues = {
+        prefix: prefix.value || '扫描件',
+        title: title,
+        date: formatDate()
+      };
+
+      order.forEach(rule => {
+        if (rule === 'prefix' && prefix.enabled && prefix.value) {
+          parts.push(prefix.value);
+        } else if (rule === 'title' && titleRule.enabled && title) {
+          parts.push(title);
+        } else if (rule === 'date' && date.enabled) {
+          parts.push(formatDate());
+        }
+      });
+
+      const filename = parts.join('_') + '.pdf';
+      $('filename-preview').textContent = filename;
+      return filename;
+    }
+
+    // Load/Save config
+    function loadConfig() {
+      const saved = localStorage.getItem('scannote_config');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          state.config = { ...state.config, ...parsed };
+
+          // Restore AI mode
+          if (state.config.ai.enabled) {
+            state.aiMode = true;
+            $('ai-mode-toggle').classList.add('active');
+            $('ai-config').style.display = 'grid';
+            $('ai-config').style.gridTemplateColumns = '1fr';
+            $('ai-config').style.gap = '12px';
+            $('api-endpoint').value = state.config.ai.endpoint || '';
+            $('api-key').value = state.config.ai.key || '';
+            $('api-model').value = state.config.ai.model || 'gpt-4o-mini';
+          }
+
+          // Restore email config
+          $('email-server').value = state.config.email.server || '';
+          $('email-port').value = state.config.email.port || 993;
+          $('email-user').value = state.config.email.user || '';
+          $('email-pass').value = state.config.email.pass || '';
+          $('email-from').value = state.config.email.from || '';
+          $('email-interval').value = state.config.email.interval || 60;
+
+          // Restore naming config
+          $('prefix-value').value = state.config.naming.prefix.value || '扫描件';
+          $('prefix-preview').textContent = state.config.naming.prefix.value || '扫描件';
+          $('save-path').value = state.config.savePath || '桌面';
+
+          document.querySelectorAll('.rule-enabled').forEach(el => {
+            const rule = el.dataset.rule;
+            const isEnabled = state.config.naming[rule]?.enabled ?? true;
+            el.classList.toggle('active', isEnabled);
+          });
+
+          updateFilenamePreview();
+        } catch (e) {
+          console.error('Failed to load config:', e);
+        }
+      }
+    }
+
+    function saveConfig() {
+      localStorage.setItem('scannote_config', JSON.stringify(state.config));
+    }
+
+    // Mode switching
+    modeTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        const mode = tab.dataset.mode;
+        state.mode = mode;
+
+        modeTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        panels.forEach(p => p.classList.remove('active'));
+        $(`${mode}-panel`).classList.add('active');
+      });
+    });
+
+    // Settings toggle
+    function setupSettingsToggle(headerId, contentId, toggleId) {
+      const header = $(headerId);
+      const content = $(contentId);
+      const toggle = $(toggleId);
+
+      header.addEventListener('click', () => {
+        content.classList.toggle('collapsed');
+        toggle.classList.toggle('collapsed');
+      });
+    }
+
+    setupSettingsToggle('email-settings-header', 'email-settings-content', 'email-settings-toggle');
+    setupSettingsToggle('naming-settings-header', 'naming-settings-content', 'naming-settings-toggle');
+
+    // AI Mode Toggle
+    $('ai-mode-toggle').addEventListener('click', function() {
+      this.classList.toggle('active');
+      state.aiMode = this.classList.contains('active');
+      state.config.ai.enabled = state.aiMode;
+      $('ai-config').style.display = state.aiMode ? 'grid' : 'none';
+      if (state.aiMode) {
+        $('ai-config').style.gridTemplateColumns = '1fr';
+        $('ai-config').style.gap = '12px';
+      }
+      saveConfig();
+    });
+
+    // Rule toggles
+    document.querySelectorAll('.rule-enabled').forEach(toggle => {
+      toggle.addEventListener('click', function() {
+        this.classList.toggle('active');
+        const rule = this.dataset.rule;
+        state.config.naming[rule].enabled = this.classList.contains('active');
+        updateFilenamePreview();
+        saveConfig();
+      });
+    });
+
+    // Drag to reorder naming rules
+    const namingRules = document.getElementById('naming-rules');
+    let draggedItem = null;
+
+    namingRules.querySelectorAll('.rule-item').forEach(item => {
+      item.setAttribute('draggable', 'true');
+
+      item.addEventListener('dragstart', function(e) {
+        draggedItem = this;
+        this.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      });
+
+      item.addEventListener('dragend', function() {
+        this.classList.remove('dragging');
+        draggedItem = null;
+        namingRules.querySelectorAll('.rule-item').forEach(i => i.classList.remove('dragover'));
+      });
+
+      item.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        if (this !== draggedItem) {
+          this.classList.add('dragover');
+        }
+      });
+
+      item.addEventListener('dragleave', function() {
+        this.classList.remove('dragover');
+      });
+
+      item.addEventListener('drop', function(e) {
+        e.preventDefault();
+        if (this !== draggedItem && draggedItem) {
+          const draggedRule = draggedItem.dataset.rule;
+          const targetRule = this.dataset.rule;
+
+          // Get current order
+          const order = state.config.naming.order;
+          const draggedIndex = order.indexOf(draggedRule);
+          const targetIndex = order.indexOf(targetRule);
+
+          // Remove dragged item
+          order.splice(draggedIndex, 1);
+          // Insert at new position
+          order.splice(targetIndex, 0, draggedRule);
+
+          // Update DOM
+          const items = Array.from(namingRules.querySelectorAll('.rule-item'));
+          const draggedDom = items[draggedIndex];
+          const targetDom = items[targetIndex];
+
+          if (draggedIndex < targetIndex) {
+            targetDom.parentNode.insertBefore(draggedDom, targetDom.nextSibling);
+          } else {
+            targetDom.parentNode.insertBefore(draggedDom, targetDom);
+          }
+
+          saveConfig();
+          updateFilenamePreview();
+        }
+        this.classList.remove('dragover');
+      });
+    });
+
+    // Prefix input
+    $('prefix-value').addEventListener('input', function() {
+      state.config.naming.prefix.value = this.value;
+      $('prefix-preview').textContent = this.value || '扫描件';
+      updateFilenamePreview();
+      saveConfig();
+    });
+
+    // Save API config
+    $('save-api-config').addEventListener('click', () => {
+      state.config.ai.endpoint = $('api-endpoint').value;
+      state.config.ai.key = $('api-key').value;
+      state.config.ai.model = $('api-model').value || 'gpt-4o-mini';
+      saveConfig();
+      showToast('API配置已保存', 'success');
+    });
+
+    // Save email config
+    $('save-email-config').addEventListener('click', () => {
+      state.config.email.server = $('email-server').value;
+      state.config.email.port = parseInt($('email-port').value) || 993;
+      state.config.email.user = $('email-user').value;
+      state.config.email.pass = $('email-pass').value;
+      state.config.email.from = $('email-from').value;
+      state.config.email.interval = parseInt($('email-interval').value) || 60;
+      saveConfig();
+      showToast('邮箱配置已保存', 'success');
+    });
+
+    // Save path
+    $('save-path').addEventListener('change', function() {
+      state.config.savePath = this.value;
+      saveConfig();
+    });
+
+    $('choose-path').addEventListener('click', () => {
+      // For web, we can't directly access filesystem
+      // Default to desktop notification
+      showToast('请在下方输入保存路径（桌面/下载文件夹/自定义路径）', 'default');
+      $('save-path').focus();
+    });
+
+    // Reset naming
+    $('reset-naming').addEventListener('click', () => {
+      state.config.naming = {
+        order: ['prefix', 'title', 'date'],
+        prefix: { enabled: true, value: '扫描件' },
+        title: { enabled: true },
+        date: { enabled: true }
+      };
+      $('prefix-value').value = '扫描件';
+      $('prefix-preview').textContent = '扫描件';
+      document.querySelectorAll('.rule-enabled').forEach(el => el.classList.add('active'));
+
+      // Reset DOM order
+      const namingRules = document.getElementById('naming-rules');
+      const items = Array.from(namingRules.querySelectorAll('.rule-item'));
+      const originalOrder = ['prefix', 'title', 'date'];
+      originalOrder.forEach((rule, index) => {
+        const item = items.find(i => i.dataset.rule === rule);
+        if (item && item !== namingRules.children[index]) {
+          namingRules.appendChild(item);
+        }
+      });
+
+      updateFilenamePreview();
+      saveConfig();
+      showToast('命名规则已重置', 'success');
+    });
+
+    // Save all config
+    $('save-all-config').addEventListener('click', () => {
+      saveConfig();
+      showToast('所有配置已保存', 'success');
+    });
+
+    // PDF Text Extraction (Local Mode)
+    async function extractTextFromPDF(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          try {
+            const typedarray = new Uint8Array(e.target.result);
+            const pdf = await pdfjsLib.getDocument(typedarray).promise;
+            let text = '';
+
+            // Extract text from first few pages
+            const maxPages = Math.min(pdf.numPages, 3);
+            for (let i = 1; i <= maxPages; i++) {
+              const page = await pdf.getPage(i);
+              const content = await page.getTextContent();
+              const pageText = content.items.map(item => item.str).join(' ');
+              text += pageText + '\n';
+            }
+
+            // Extract title from first few lines
+            const lines = text.split('\n').filter(l => l.trim());
+            const title = lines.slice(0, 5).join(' ').trim();
+            resolve(truncateChinese(title, 10) || '未识别');
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    // AI Mode - Call API
+    async function extractTextWithAI(file) {
+      const { endpoint, key, model } = state.config.ai;
+
+      if (!endpoint || !key) {
+        throw new Error('请先配置API信息');
+      }
+
+      // Convert PDF to text first
+      const text = await extractTextFromPDF(file);
+      const truncatedText = text.slice(0, 500);
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${key}`
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [{
+            role: 'user',
+            content: `从以下PDF内容中提取文档标题（最多10个汉字），只返回标题文字，不要其他内容：\n\n${truncatedText}`
+          }],
+          max_tokens: 50,
+          temperature: 0.3
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API错误: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const title = data.choices?.[0]?.message?.content?.trim() || text;
+      return truncateChinese(title.replace(/[""]/g, ''), 10);
+    }
+
+    // Process file
+    async function processFile(file) {
+      const id = Date.now() + Math.random();
+      const fileObj = {
+        id,
+        originalName: file.name,
+        newName: '',
+        status: 'processing',
+        title: ''
+      };
+
+      state.files.push(fileObj);
+      renderFileList();
+
+      try {
+        let title;
+        if (state.aiMode) {
+          title = await extractTextWithAI(file);
+        } else {
+          title = await extractTextFromPDF(file);
+        }
+
+        fileObj.title = title;
+        const { prefix, title: titleRule, date } = state.config.naming;
+        const parts = [];
+
+        if (prefix.enabled && prefix.value) parts.push(prefix.value);
+        if (titleRule.enabled) parts.push(title);
+        if (date.enabled) parts.push(formatDate());
+
+        fileObj.newName = parts.join('_') + '.pdf';
+        fileObj.status = 'success';
+
+      } catch (err) {
+        console.error('Process error:', err);
+        fileObj.status = 'error';
+        fileObj.title = '识别失败';
+        fileObj.newName = '扫描件_' + formatDate() + '.pdf';
+      }
+
+      renderFileList();
+      return fileObj;
+    }
+
+    // Render file list
+    function renderFileList() {
+      fileList.innerHTML = state.files.map(f => `
+        <div class="file-card" data-id="${f.id}">
+          <div class="file-icon">
+            <svg viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          </div>
+          <div class="file-info">
+            <div class="file-original">${f.originalName}</div>
+            <div class="file-new">
+              <input type="text" value="${f.newName}" ${f.status !== 'success' ? 'readonly' : ''}>
+              <span class="file-status ${f.status}">${f.status === 'processing' ? '处理中' : f.status === 'success' ? '完成' : '失败'}</span>
+            </div>
+          </div>
+          <div class="file-actions">
+            <button class="btn-icon download" title="下载" ${f.status !== 'success' ? 'disabled' : ''}>
+              <svg viewBox="0 0 24 24"><path d="M12 15V3m0 12l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17"/></svg>
+            </button>
+            <button class="btn-icon delete" title="删除">
+              <svg viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+          </div>
+        </div>
+      `).join('');
+
+      // Bind events
+      fileList.querySelectorAll('.file-card').forEach(card => {
+        const id = parseFloat(card.dataset.id);
+        const fileObj = state.files.find(f => f.id === id);
+
+        card.querySelector('.file-new input').addEventListener('change', function() {
+          fileObj.newName = this.value;
+        });
+
+        card.querySelector('.download').addEventListener('click', () => {
+          downloadFile(fileObj);
+        });
+
+        card.querySelector('.delete').addEventListener('click', () => {
+          state.files = state.files.filter(f => f.id !== id);
+          renderFileList();
+        });
+      });
+    }
+
+    // Download file
+    async function downloadFile(fileObj) {
+      // For processed files, we need to re-read the original
+      // In a real app, we'd store the blob
+      showToast('请保存文件到: ' + state.config.savePath + '\\' + fileObj.newName, 'success');
+    }
+
+    // Drag and Drop
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+
+      const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+
+      if (files.length === 0) {
+        showToast('请拖入PDF文件', 'error');
+        return;
+      }
+
+      for (const file of files) {
+        await processFile(file);
+      }
+    });
+
+    fileInput.addEventListener('change', async () => {
+      const files = Array.from(fileInput.files);
+      for (const file of files) {
+        await processFile(file);
+      }
+      fileInput.value = '';
+    });
+
+    // Email Mode
+    const statusDot = $('status-dot');
+    const statusTitle = $('status-title');
+    const statusDesc = $('status-desc');
+    const connectBtn = $('connect-btn');
+
+    async function checkEmail() {
+      // Note: Browser cannot directly connect to IMAP due to CORS
+      // This is a demo implementation
+      // In production, you would need:
+      // 1. A browser extension with permissions
+      // 2. A local proxy server
+      // 3. Or use a service like emailjs/mailgun
+
+      statusDot.className = 'status-dot connecting';
+      statusTitle.textContent = '检查中...';
+      statusDesc.textContent = '正在连接邮箱服务器...';
+
+      try {
+        // Simulate connection (actual IMAP requires server-side)
+        const { server, user, pass, from } = state.config.email;
+
+        if (!server || !user || !pass) {
+          throw new Error('请填写完整的邮箱配置');
+        }
+
+        // In real implementation, this would connect via extension or proxy
+        showToast('浏览器无法直接访问IMAP，请使用扩展或本地代理', 'error');
+
+        statusDot.className = 'status-dot error';
+        statusTitle.textContent = '连接失败';
+        statusDesc.textContent = '浏览器安全限制，请使用扩展或代理';
+
+      } catch (err) {
+        statusDot.className = 'status-dot error';
+        statusTitle.textContent = '错误';
+        statusDesc.textContent = err.message;
+      }
+    }
+
+    connectBtn.addEventListener('click', () => {
+      if (state.emailConnected) {
+        // Disconnect
+        clearInterval(state.emailCheckInterval);
+        state.emailConnected = false;
+        connectBtn.textContent = '连接';
+        statusDot.className = 'status-dot';
+        statusTitle.textContent = '未连接';
+        statusDesc.textContent = '配置邮箱信息后开始监听';
+      } else {
+        // Connect
+        checkEmail();
+
+        // Set up periodic check
+        const interval = (state.config.email.interval || 60) * 1000;
+        state.emailCheckInterval = setInterval(checkEmail, interval);
+        state.emailConnected = true;
+        connectBtn.textContent = '断开';
+      }
+    });
+
+    // Initialize
+    loadConfig();
+    updateFilenamePreview();
+  </script>
+</body>
+</html>
