@@ -1355,6 +1355,11 @@
         throw new Error('请先配置API信息');
       }
 
+      // Validate endpoint format
+      if (!endpoint.includes('/v1/chat')) {
+        throw new Error('API端点格式错误，应为: https://api.deepseek.com/v1/chat/completions');
+      }
+
       // Convert PDF to text first
       const text = await extractTextFromPDF(file);
       const truncatedText = text.slice(0, 500);
@@ -1378,9 +1383,15 @@
         });
 
         if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`API错误 ${response.status}: ${errorText.slice(0, 200)}`);
-        }
+            let errorText = '';
+            try {
+              const errorData = await response.json();
+              errorText = errorData.error?.message || JSON.stringify(errorData);
+            } catch {
+              errorText = await response.text();
+            }
+            throw new Error(`API错误 ${response.status}: ${errorText.slice(0, 300)}`);
+          }
 
         const data = await response.json();
         const title = data.choices?.[0]?.message?.content?.trim() || text;
