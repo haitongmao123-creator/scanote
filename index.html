@@ -429,8 +429,8 @@
     }
 
     .drop-zone-icon {
-      width: 64px;
-      height: 64px;
+      width: 80px;
+      height: 80px;
       margin: 0 auto 16px;
       color: var(--text-secondary);
       transition: var(--transition);
@@ -839,8 +839,11 @@
     <!-- Drag Mode Panel -->
     <div class="panel" id="drag-panel">
       <div class="drop-zone" id="drop-zone">
-        <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+        <svg class="drop-zone-icon" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="10" y="10" width="60" height="60" rx="8" stroke="currentColor" stroke-width="2" fill="none"/>
+          <path d="M30 40L40 30L50 40" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M40 30V55" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M25 50L40 60L55 50" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
         </svg>
         <h3>拖拽PDF文件到此处</h3>
         <p>或点击选择文件</p>
@@ -865,8 +868,8 @@
       <div class="settings-content" id="naming-settings-content">
         <div class="toggle-group">
           <div>
-            <div class="toggle-label">识别模式</div>
-            <div class="toggle-desc">关闭则使用本地模式提取标题</div>
+            <div class="toggle-label">AI 识别模式</div>
+            <div class="toggle-desc">关闭则使用本地模式（无法识别扫描图片）</div>
           </div>
           <div class="toggle" id="ai-mode-toggle"></div>
         </div>
@@ -883,6 +886,11 @@
           <div class="form-group">
             <label>模型</label>
             <input type="text" id="api-model" placeholder="gpt-4o-mini" value="gpt-4o-mini">
+          </div>
+          <div class="form-group" style="background: #FFF3CD; padding: 12px; border-radius: 8px; margin-top: 8px;">
+            <div style="font-size: 12px; color: #856404;">
+              💡 提示：AI模式可以识别扫描图片中的文字，需要配置API Key
+            </div>
           </div>
           <button class="btn btn-secondary" id="save-api-config">保存API配置</button>
         </div>
@@ -1263,11 +1271,13 @@
       saveConfig();
     });
 
+    // Choose path - Browser cannot access filesystem directly
+    // We can only save to user's Downloads folder via download API
     $('choose-path').addEventListener('click', () => {
-      // For web, we can't directly access filesystem
-      // Default to desktop notification
-      showToast('请在下方输入保存路径（桌面/下载文件夹/自定义路径）', 'default');
-      $('save-path').focus();
+      showToast('浏览器无法选择保存路径，文件将下载到浏览器的下载文件夹', 'default');
+      $('save-path').value = '浏览器下载文件夹';
+      state.config.savePath = '浏览器下载文件夹';
+      saveConfig();
     });
 
     // Reset naming
@@ -1382,7 +1392,8 @@
         originalName: file.name,
         newName: '',
         status: 'processing',
-        title: ''
+        title: '',
+        blob: file // 保存原始文件blob用于下载
       };
 
       state.files.push(fileObj);
@@ -1412,6 +1423,9 @@
         fileObj.status = 'error';
         fileObj.title = '识别失败';
         fileObj.newName = '扫描件_' + formatDate() + '.pdf';
+        
+        // 检查是否是扫描图片（无法提取文字）
+        showToast('无法识别PDF内容，可能是扫描图片，请尝试使用AI模式', 'error');
       }
 
       renderFileList();
@@ -1464,10 +1478,23 @@
     }
 
     // Download file
-    async function downloadFile(fileObj) {
-      // For processed files, we need to re-read the original
-      // In a real app, we'd store the blob
-      showToast('请保存文件到: ' + state.config.savePath + '\\' + fileObj.newName, 'success');
+    function downloadFile(fileObj) {
+      if (!fileObj.blob) {
+        showToast('文件数据丢失，无法下载', 'error');
+        return;
+      }
+      
+      // 创建下载链接
+      const url = URL.createObjectURL(fileObj.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileObj.newName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      showToast('文件已下载: ' + fileObj.newName, 'success');
     }
 
     // Drag and Drop
