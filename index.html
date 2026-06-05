@@ -1315,8 +1315,8 @@
       showToast('所有配置已保存', 'success');
     });
 
-    // PDF Text Extraction (Local Mode)
-    async function extractTextFromPDF(file) {
+    // Extract raw text from PDF
+    async function extractRawTextFromPDF(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = async (e) => {
@@ -1333,11 +1333,7 @@
               const pageText = content.items.map(item => item.str).join(' ');
               text += pageText + '\n';
             }
-
-            // Extract title from first few lines
-            const lines = text.split('\n').filter(l => l.trim());
-            const title = lines.slice(0, 5).join(' ').trim();
-            resolve(truncateChinese(title, 10) || '未识别');
+            resolve(text);
           } catch (err) {
             reject(err);
           }
@@ -1345,6 +1341,40 @@
         reader.onerror = reject;
         reader.readAsArrayBuffer(file);
       });
+    }
+
+    // PDF Text Extraction (Local Mode)
+    async function extractTextFromPDF(file) {
+      try {
+        const text = await extractRawTextFromPDF(file);
+        const typedarray = new Uint8Array(await file.arrayBuffer());
+        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+
+        // Try to get title from PDF metadata
+        let potentialTitle = '';
+        try {
+          const metadata = await pdf.getMetadata();
+          if (metadata.info?.Title) {
+            potentialTitle = metadata.info.Title;
+          }
+        } catch {}
+
+        // Extract title from first few lines
+        const lines = text.split('\n').filter(l => l.trim());
+        let title = potentialTitle || lines.slice(0, 5).join(' ').trim();
+
+        // If still no title, try to extract from filename
+        if (!title || title === '未识别' || title === '未命名') {
+          const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
+          title = filenameWithoutExt;
+        }
+
+        return truncateChinese(title, 10) || '未命名';
+      } catch (err) {
+        // Fallback to filename
+        const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
+        return truncateChinese(filenameWithoutExt, 10) || '未命名';
+      }
     }
 
     // AI Mode - Call API
@@ -1361,8 +1391,21 @@
       }
 
       // Convert PDF to text first
-      const text = await extractTextFromPDF(file);
-      const truncatedText = text.slice(0, 500);
+      let rawText;
+      try {
+        rawText = await extractRawTextFromPDF(file);
+      } catch {
+        rawText = '';
+      }
+
+      // If no text extracted, use filename
+      const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
+      let promptText = rawText;
+      if (!rawText || rawText.trim() === '') {
+        promptText = `文件名: ${filenameWithoutExt}\n(无法提取PDF文本，可能是扫描图片)`;
+      }
+
+      const truncatedText = promptText.slice(0, 1000);
 
       try {
         const response = await fetch(endpoint, {
@@ -1372,12 +1415,12 @@
             'Authorization': `Bearer ${key}`
           },
           body: JSON.stringify({
-            model: model || 'deepseek-chat',
+            model: model || 'deepseek-v4-flash',
             messages: [{
               role: 'user',
-              content: `从以下PDF内容中提取文档标题（最多10个汉字），只返回标题文字，不要其他内容：\n\n${truncatedText}`
+              content: `请根据以下信息给出一个合适的文档标题（最多10个汉字），只返回标题文字，不要其他任何解释：\n\n${truncatedText}`
             }],
-            max_tokens: 50,
+            max_tokens: 100,
             temperature: 0.3
           })
         });
@@ -1394,8 +1437,18 @@
           }
 
         const data = await response.json();
-        const title = data.choices?.[0]?.message?.content?.trim() || text;
-        return truncateChinese(title.replace(/[""]/g, ''), 10);
+        let title = data.choices?.[0]?.message?.content?.trim() || '';
+        
+        // Clean up the title
+        title = title.replace(/[""''""']/g, '').replace(/[。！？，、；：\.\?!,;:]$/, '').trim();
+        
+        // Fallback to filename if title is still empty
+        if (!title || title === '未识别' || title === '未命名') {
+          const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
+          title = filenameWithoutExt;
+        }
+        
+        return truncateChinese(title, 10);
       } catch (err) {
         if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
           throw new Error('CORS错误: 浏览器无法直接访问此API，请使用支持CORS的API或配置代理服务器');
@@ -1422,7 +1475,12 @@
       try {
         let title;
         if (state.aiMode) {
-          title = await extractTextWithAI(file);
+          try {
+            title = await extractTextWithAI(file);
+          } catch (aiErr) {
+            console.warn('AI mode failed, falling back to local mode:', aiErr);
+            title = await extractTextFromPDF(file);
+          }
         } else {
           title = await extractTextFromPDF(file);
         }
@@ -1440,12 +1498,18 @@
 
       } catch (err) {
         console.error('Process error:', err);
-        fileObj.status = 'error';
-        fileObj.title = '识别失败';
-        fileObj.newName = '扫描件_' + formatDate() + '.pdf';
-        
-        // 检查是否是扫描图片（无法提取文字）
-        showToast('无法识别PDF内容，可能是扫描图片，请尝试使用AI模式', 'error');
+        // 最后的兜底方案：使用原文件名
+        const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
+        const title = truncateChinese(filenameWithoutExt, 10) || '未命名';
+        fileObj.title = title;
+        const { prefix, title: titleRule, date } = state.config.naming;
+        const parts = [];
+        if (prefix.enabled && prefix.value) parts.push(prefix.value);
+        if (titleRule.enabled) parts.push(title);
+        if (date.enabled) parts.push(formatDate());
+        fileObj.newName = parts.join('_') + '.pdf';
+        fileObj.status = 'success';
+        showToast('已使用原文件名作为标题', 'info');
       }
 
       renderFileList();
@@ -1468,7 +1532,11 @@
           </div>
           <div class="file-actions">
             <button class="btn-icon download" title="下载" ${f.status !== 'success' ? 'disabled' : ''}>
-              <svg viewBox="0 0 24 24"><path d="M12 15V3m0 12l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
             </button>
             <button class="btn-icon delete" title="删除">
               <svg viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
