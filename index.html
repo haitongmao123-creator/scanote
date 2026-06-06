@@ -517,6 +517,26 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
+      min-height: 60px;
+      background: transparent;
+      border: none;
+      border-radius: 12px;
+      padding: 0;
+      transition: all var(--transition);
+    }
+
+    .file-list.empty {
+      background: #FAFAFA;
+      border: 1px dashed #E5E7EB;
+      padding: 16px;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .file-list.empty::before {
+      content: '暂无文件';
+      font-size: 14px;
+      color: #9CA3AF;
     }
 
     .file-card {
@@ -1410,25 +1430,50 @@
       showToast('所有配置已保存', 'success');
     });
 
-    // Extract raw text from PDF
-    async function extractRawTextFromPDF(file) {
+    // Extract raw text from PDF (with font size info)
+    async function extractRawTextFromPDF(file, includeFontInfo = false) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = async (e) => {
           try {
             const typedarray = new Uint8Array(e.target.result);
             const pdf = await pdfjsLib.getDocument(typedarray).promise;
-            let text = '';
-
-            // Extract text from first few pages
-            const maxPages = Math.min(pdf.numPages, 3);
-            for (let i = 1; i <= maxPages; i++) {
-              const page = await pdf.getPage(i);
-              const content = await page.getTextContent();
-              const pageText = content.items.map(item => item.str).join(' ');
-              text += pageText + '\n';
+            
+            if (includeFontInfo) {
+              // Return text with font size info for better title detection
+              const textBlocks = [];
+              const maxPages = Math.min(pdf.numPages, 3);
+              for (let i = 1; i <= maxPages; i++) {
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+                
+                content.items.forEach(item => {
+                  if (item.str && item.str.trim()) {
+                    const fontSize = item.fontSize || 12;
+                    const x = item.transform[4] || 0;
+                    const y = item.transform[5] || 0;
+                    textBlocks.push({
+                      text: item.str.trim(),
+                      fontSize,
+                      x,
+                      y
+                    });
+                  }
+                });
+              }
+              resolve({ textBlocks });
+            } else {
+              // Return plain text
+              let text = '';
+              const maxPages = Math.min(pdf.numPages, 3);
+              for (let i = 1; i <= maxPages; i++) {
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+                const pageText = content.items.map(item => item.str).join(' ');
+                text += pageText + '\n';
+              }
+              resolve(text);
             }
-            resolve(text);
           } catch (err) {
             reject(err);
           }
@@ -1447,10 +1492,17 @@
         const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
         addDebugInfo('📁 文件名（无后缀）', filenameWithoutExt);
 
-        // 2. 尝试提取PDF文本
+        // 2. 尝试提取PDF文本（带字体大小信息）
         let text = '';
+        let textBlocks = [];
         try {
-          text = await extractRawTextFromPDF(file);
+          const result = await extractRawTextFromPDF(file, true);
+          if (result.textBlocks) {
+            textBlocks = result.textBlocks;
+            text = textBlocks.map(b => b.text).join(' ');
+          } else {
+            text = result;
+          }
           addDebugInfo('📝 提取的文本', (text || '').slice(0, 200));
         } catch (err) {
           addDebugInfo('❌ 文本提取错误', err.message);
@@ -1470,7 +1522,7 @@
           addDebugInfo('⚠️ 元数据读取', '无法读取: ' + err.message);
         }
 
-        // 4. 分析文本，尝试找出标题
+        // 4. 分析文本，尝试找出标题（优先选择页面顶部的文本）
         let extractedTitle = '';
         
         // 首先尝试元数据标题
@@ -1478,18 +1530,78 @@
           extractedTitle = metaTitle;
           addDebugInfo('✅ 使用元数据标题', extractedTitle);
         }
-        // 然后尝试文本内容
+        // 然后尝试从文本块中找标题（优先选择页面顶部的文本）
+        else if (textBlocks.length > 0) {
+          // 按Y坐标降序排序（Y越大越靠上）
+          const sortedByY = [...textBlocks].sort((a, b) => b.y - a.y);
+          addDebugInfo('🔍 按位置排序（顶部优先）', sortedByY.slice(0, 5).map(b => `Y=${Math.round(b.y)} ${b.fontSize}px: ${b.text}`).join('\n'));
+          
+          // 计算页面顶部区域（前30%的文本块）
+          const topThreshold = sortedByY[0]?.y ? sortedByY[0].y * 0.7 : 300;
+          const topAreaBlocks = sortedByY.filter(b => b.y > topThreshold);
+          addDebugInfo('📍 顶部区域文本块', `${topAreaBlocks.length} 个，阈值: ${Math.round(topThreshold)}`);
+          
+          // 在顶部区域中按字体大小排序
+          const topSortedByFont = [...topAreaBlocks].sort((a, b) => b.fontSize - a.fontSize);
+          addDebugInfo('🔤 顶部区域按字体大小排序', topSortedByFont.slice(0, 3).map(b => `${b.fontSize}px: ${b.text}`).join('\n'));
+          
+          // 找字体最大且长度合适的文本作为标题
+          for (const block of topSortedByFont) {
+            if (block.text.length > 3 && block.text.length < 100) {
+              // 检查是否包含常见标题关键词
+              const titleKeywords = ['考试', '合格', '成绩', '证书', '证明', '报告', '通知', '决定', '批复', '申请'];
+              const hasKeyword = titleKeywords.some(kw => block.text.includes(kw));
+              
+              if (hasKeyword || block.fontSize >= 14 || block.y > topThreshold + 50) {
+                extractedTitle = block.text;
+                addDebugInfo('✅ 使用顶部大字体标题', `${block.fontSize}px Y=${Math.round(block.y)}: ${extractedTitle}`);
+                break;
+              }
+            }
+          }
+          
+          // 如果没找到，找页面最顶部的文本（不限制字体大小）
+          if (!extractedTitle) {
+            for (const block of sortedByY.slice(0, 15)) {
+              if (block.text.length > 3 && block.text.length < 100) {
+                // 跳过纯数字或日期
+                if (!/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && 
+                    !/^\d{8}$/.test(block.text)) {
+                  extractedTitle = block.text;
+                  addDebugInfo('✅ 使用页面最顶部文本', `Y=${Math.round(block.y)}: ${extractedTitle}`);
+                  break;
+                }
+              }
+            }
+          }
+          
+          // 如果还是没找到，尝试字体最大的
+          if (!extractedTitle) {
+            const sortedByFont = [...textBlocks].sort((a, b) => b.fontSize - a.fontSize);
+            for (const block of sortedByFont) {
+              if (block.text.length > 3 && block.text.length < 100) {
+                extractedTitle = block.text;
+                addDebugInfo('✅ 使用字体最大的文本', `${block.fontSize}px: ${extractedTitle}`);
+                break;
+              }
+            }
+          }
+        }
+        // 最后尝试普通文本
         else if (text && text.trim().length > 0) {
           const lines = text.split('\n').filter(l => l.trim().length > 2);
           addDebugInfo('🔍 找到的文本行', lines.slice(0, 5).join('\n'));
           
-          // 找第一行非空文本
           for (const line of lines) {
             const trimmed = line.trim();
-            if (trimmed.length > 1 && trimmed.length < 100) {
-              extractedTitle = trimmed;
-              addDebugInfo('✅ 使用文本标题', extractedTitle);
-              break;
+            if (trimmed.length > 3 && trimmed.length < 100) {
+              // 跳过纯数字或日期
+              if (!/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(trimmed) && 
+                  !/^\d{8}$/.test(trimmed)) {
+                extractedTitle = trimmed;
+                addDebugInfo('✅ 使用文本标题', extractedTitle);
+                break;
+              }
             }
           }
         }
@@ -1615,7 +1727,9 @@
       };
 
       state.files.push(fileObj);
+      console.log('[识笺] 文件已添加到列表，当前文件数量:', state.files.length);
       renderFileList();
+      console.log('[识笺] 文件列表已渲染');
 
       try {
         clearDebugInfo();
@@ -1670,6 +1784,14 @@
 
     // Render file list
     function renderFileList() {
+      // Update empty state class
+      fileList.classList.toggle('empty', state.files.length === 0);
+      
+      if (state.files.length === 0) {
+        fileList.innerHTML = '';
+        return;
+      }
+      
       fileList.innerHTML = state.files.map(f => `
         <div class="file-card" data-id="${f.id}">
           <div class="file-icon">
