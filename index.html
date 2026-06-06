@@ -142,6 +142,65 @@
       to { opacity: 1; transform: translateY(0); }
     }
 
+    /* Debug Panel */
+    .debug-panel {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+
+    .debug-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .debug-panel-title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .debug-content {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.6;
+    }
+
+    .debug-item {
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+
+    .debug-item:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+    }
+
+    .debug-label {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .debug-value {
+      color: var(--text-primary);
+      margin-top: 4px;
+    }
+
     /* Settings Panel */
     .settings-panel {
       background: #FAFAFA;
@@ -848,6 +907,22 @@
         <p>或点击选择文件</p>
         <input type="file" class="hidden-input" id="file-input" accept=".pdf" multiple>
       </div>
+
+      <!-- Debug Panel -->
+      <div class="debug-panel">
+        <div class="debug-panel-header">
+          <div class="debug-panel-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+            </svg>
+            识别调试信息
+          </div>
+        </div>
+        <div class="debug-content" id="debug-content">
+          拖入PDF文件后这里会显示识别信息...
+        </div>
+      </div>
+
       <div class="file-list" id="file-list"></div>
     </div>
 
@@ -876,7 +951,7 @@
         <div id="ai-config" style="display:none;">
           <div class="form-group">
             <label>API 端点</label>
-            <input type="url" id="api-endpoint" placeholder="https://api.openai.com/v1/chat/completions">
+            <input type="url" id="api-endpoint" placeholder="https://api.deepseek.com/v1/chat/completions">
           </div>
           <div class="form-group">
             <label>API Key</label>
@@ -951,7 +1026,7 @@
         <div class="form-group" style="margin-top: 16px;">
           <label>保存位置</label>
           <div style="display: flex; gap: 8px;">
-            <input type="text" id="save-path" placeholder="默认保存到桌面" value="桌面" style="flex:1;">
+            <input type="text" id="save-path" placeholder="默认保存到桌面" value="浏览器下载文件夹" style="flex:1;">
             <button class="btn btn-secondary" id="choose-path">选择</button>
           </div>
         </div>
@@ -1004,7 +1079,7 @@
           title: { enabled: true },
           date: { enabled: true }
         },
-        savePath: '桌面'
+        savePath: '浏览器下载文件夹'
       }
     };
 
@@ -1016,6 +1091,26 @@
     const fileInput = $('file-input');
     const fileList = $('file-list');
     const toast = $('toast');
+    const debugContent = $('debug-content');
+
+    // Debug logging
+    function addDebugInfo(label, value) {
+      const debugItem = document.createElement('div');
+      debugItem.className = 'debug-item';
+      debugItem.innerHTML = `
+        <div class="debug-label">${label}</div>
+        <div class="debug-value">${value}</div>
+      `;
+      if (debugContent.textContent.includes('拖入PDF文件后这里会显示识别信息...')) {
+        debugContent.innerHTML = '';
+      }
+      debugContent.appendChild(debugItem);
+      debugContent.scrollTop = debugContent.scrollHeight;
+    }
+
+    function clearDebugInfo() {
+      debugContent.innerHTML = '拖入PDF文件后这里会显示识别信息...';
+    }
 
     // Utility Functions
     function showToast(message, type = 'default') {
@@ -1100,7 +1195,7 @@
           // Restore naming config
           $('prefix-value').value = state.config.naming.prefix.value || '扫描件';
           $('prefix-preview').textContent = state.config.naming.prefix.value || '扫描件';
-          $('save-path').value = state.config.savePath || '桌面';
+          $('save-path').value = state.config.savePath || '浏览器下载文件夹';
 
           document.querySelectorAll('.rule-enabled').forEach(el => {
             const rule = el.dataset.rule;
@@ -1343,42 +1438,79 @@
       });
     }
 
-    // PDF Text Extraction (Local Mode)
+    // PDF Text Extraction (Local Mode) - Improved!
     async function extractTextFromPDF(file) {
       try {
-        const text = await extractRawTextFromPDF(file);
-        console.log('[识笺] 提取的文本:', text.slice(0, 200));
+        addDebugInfo('📄 文件名', file.name);
         
-        const typedarray = new Uint8Array(await file.arrayBuffer());
-        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+        // 1. 首先尝试从文件名提取
+        const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
+        addDebugInfo('📁 文件名（无后缀）', filenameWithoutExt);
 
-        // Try to get title from PDF metadata
-        let potentialTitle = '';
+        // 2. 尝试提取PDF文本
+        let text = '';
         try {
-          const metadata = await pdf.getMetadata();
-          console.log('[识笺] PDF元数据:', metadata.info);
-          if (metadata.info?.Title) {
-            potentialTitle = metadata.info.Title;
-          }
-        } catch {}
-
-        // Extract title from first few lines
-        const lines = text.split('\n').filter(l => l.trim());
-        console.log('[识笺] 前5行文本:', lines.slice(0, 5));
-        let title = potentialTitle || lines.slice(0, 5).join(' ').trim();
-
-        // If still no title, try to extract from filename
-        if (!title || title === '未识别' || title === '未命名') {
-          const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
-          title = filenameWithoutExt;
+          text = await extractRawTextFromPDF(file);
+          addDebugInfo('📝 提取的文本', (text || '').slice(0, 200));
+        } catch (err) {
+          addDebugInfo('❌ 文本提取错误', err.message);
         }
 
-        console.log('[识笺] 最终标题:', title);
-        return truncateChinese(title, 10) || '未命名';
+        // 3. 尝试获取PDF元数据
+        let metaTitle = '';
+        try {
+          const typedarray = new Uint8Array(await file.arrayBuffer());
+          const pdf = await pdfjsLib.getDocument(typedarray).promise;
+          const metadata = await pdf.getMetadata();
+          if (metadata.info?.Title) {
+            metaTitle = metadata.info.Title;
+            addDebugInfo('📋 元数据标题', metaTitle);
+          }
+        } catch (err) {
+          addDebugInfo('⚠️ 元数据读取', '无法读取: ' + err.message);
+        }
+
+        // 4. 分析文本，尝试找出标题
+        let extractedTitle = '';
+        
+        // 首先尝试元数据标题
+        if (metaTitle && metaTitle.length > 2) {
+          extractedTitle = metaTitle;
+          addDebugInfo('✅ 使用元数据标题', extractedTitle);
+        }
+        // 然后尝试文本内容
+        else if (text && text.trim().length > 0) {
+          const lines = text.split('\n').filter(l => l.trim().length > 2);
+          addDebugInfo('🔍 找到的文本行', lines.slice(0, 5).join('\n'));
+          
+          // 找第一行非空文本
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.length > 1 && trimmed.length < 100) {
+              extractedTitle = trimmed;
+              addDebugInfo('✅ 使用文本标题', extractedTitle);
+              break;
+            }
+          }
+        }
+
+        // 5. 如果都没找到，使用文件名
+        let finalTitle = extractedTitle || filenameWithoutExt;
+        
+        // 清理标题
+        finalTitle = finalTitle
+          .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        addDebugInfo('🏷️ 最终标题', finalTitle);
+
+        return truncateChinese(finalTitle, 10) || '未命名';
       } catch (err) {
-        console.error('[识笺] 本地识别失败:', err);
+        addDebugInfo('❌ 本地识别失败', err.message);
         // Fallback to filename
         const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
+        addDebugInfo('⚠️ 回退到文件名', filenameWithoutExt);
         return truncateChinese(filenameWithoutExt, 10) || '未命名';
       }
     }
@@ -1414,10 +1546,9 @@
       const truncatedText = promptText.slice(0, 1000);
 
       try {
-        console.log('[识笺] 发送API请求到:', endpoint);
-        console.log('[识笺] 请求模型:', model || 'deepseek-v4-flash');
-        console.log('[识笺] 发送内容:', truncatedText.slice(0, 500));
-        
+        addDebugInfo('🤖 API调用', '发送请求到 ' + endpoint);
+        addDebugInfo('📤 发送内容', truncatedText.slice(0, 300));
+
         const response = await fetch(endpoint, {
           method: 'POST',
           headers: {
@@ -1436,32 +1567,34 @@
         });
 
         if (!response.ok) {
-            let errorText = '';
-            try {
-              const errorData = await response.json();
-              errorText = errorData.error?.message || JSON.stringify(errorData);
-            } catch {
-              errorText = await response.text();
-            }
-            throw new Error(`API错误 ${response.status}: ${errorText.slice(0, 300)}`);
+          let errorText = '';
+          try {
+            const errorData = await response.json();
+            errorText = errorData.error?.message || JSON.stringify(errorData);
+          } catch {
+            errorText = await response.text();
           }
+          addDebugInfo('❌ API错误', `状态码 ${response.status}: ${errorText}`);
+          throw new Error(`API错误 ${response.status}: ${errorText}`);
+        }
 
         const data = await response.json();
-        console.log('[识笺] API响应:', JSON.stringify(data).slice(0, 500));
-        
+        addDebugInfo('📥 API响应', JSON.stringify(data).slice(0, 300));
+
         let title = data.choices?.[0]?.message?.content?.trim() || '';
-        
+
         // Clean up the title
         title = title.replace(/[""''""']/g, '').replace(/[。！？，、；：\.\?!,;:]$/, '').trim();
-        
+
         // Fallback to filename if title is still empty
         if (!title || title === '未识别' || title === '未命名') {
-          const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
           title = filenameWithoutExt;
         }
-        
+
+        addDebugInfo('🏷️ AI生成标题', title);
         return truncateChinese(title, 10);
       } catch (err) {
+        addDebugInfo('❌ AI模式失败', err.message);
         if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
           throw new Error('CORS错误: 浏览器无法直接访问此API，请使用支持CORS的API或配置代理服务器');
         }
@@ -1485,15 +1618,20 @@
       renderFileList();
 
       try {
+        clearDebugInfo();
+        addDebugInfo('🎯 开始处理', file.name);
+
         let title;
         if (state.aiMode) {
+          addDebugInfo('🔧 模式', 'AI识别模式');
           try {
             title = await extractTextWithAI(file);
           } catch (aiErr) {
-            console.warn('AI mode failed, falling back to local mode:', aiErr);
+            addDebugInfo('⚠️ AI失败', '回退到本地模式: ' + aiErr.message);
             title = await extractTextFromPDF(file);
           }
         } else {
+          addDebugInfo('🔧 模式', '本地识别模式');
           title = await extractTextFromPDF(file);
         }
 
@@ -1507,9 +1645,10 @@
 
         fileObj.newName = parts.join('_') + '.pdf';
         fileObj.status = 'success';
+        addDebugInfo('✅ 完成', fileObj.newName);
 
       } catch (err) {
-        console.error('Process error:', err);
+        addDebugInfo('❌ 处理失败', err.message);
         // 最后的兜底方案：使用原文件名
         const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
         const title = truncateChinese(filenameWithoutExt, 10) || '未命名';
@@ -1521,6 +1660,7 @@
         if (date.enabled) parts.push(formatDate());
         fileObj.newName = parts.join('_') + '.pdf';
         fileObj.status = 'success';
+        addDebugInfo('⚠️ 使用原文件名', fileObj.newName);
         showToast('已使用原文件名作为标题', 'info');
       }
 
@@ -1551,152 +1691,4 @@
               </svg>
             </button>
             <button class="btn-icon delete" title="删除">
-              <svg viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-            </button>
-          </div>
-        </div>
-      `).join('');
-
-      // Bind events
-      fileList.querySelectorAll('.file-card').forEach(card => {
-        const id = parseFloat(card.dataset.id);
-        const fileObj = state.files.find(f => f.id === id);
-
-        card.querySelector('.file-new input').addEventListener('change', function() {
-          fileObj.newName = this.value;
-        });
-
-        card.querySelector('.download').addEventListener('click', () => {
-          downloadFile(fileObj);
-        });
-
-        card.querySelector('.delete').addEventListener('click', () => {
-          state.files = state.files.filter(f => f.id !== id);
-          renderFileList();
-        });
-      });
-    }
-
-    // Download file
-    function downloadFile(fileObj) {
-      if (!fileObj.blob) {
-        showToast('文件数据丢失，无法下载', 'error');
-        return;
-      }
-      
-      // 创建下载链接
-      const url = URL.createObjectURL(fileObj.blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileObj.newName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
-      showToast('文件已下载: ' + fileObj.newName, 'success');
-    }
-
-    // Drag and Drop
-    dropZone.addEventListener('click', () => fileInput.click());
-
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      dropZone.classList.add('dragover');
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-      dropZone.classList.remove('dragover');
-    });
-
-    dropZone.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('dragover');
-
-      const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
-
-      if (files.length === 0) {
-        showToast('请拖入PDF文件', 'error');
-        return;
-      }
-
-      for (const file of files) {
-        await processFile(file);
-      }
-    });
-
-    fileInput.addEventListener('change', async () => {
-      const files = Array.from(fileInput.files);
-      for (const file of files) {
-        await processFile(file);
-      }
-      fileInput.value = '';
-    });
-
-    // Email Mode
-    const statusDot = $('status-dot');
-    const statusTitle = $('status-title');
-    const statusDesc = $('status-desc');
-    const connectBtn = $('connect-btn');
-
-    async function checkEmail() {
-      // Note: Browser cannot directly connect to IMAP due to CORS
-      // This is a demo implementation
-      // In production, you would need:
-      // 1. A browser extension with permissions
-      // 2. A local proxy server
-      // 3. Or use a service like emailjs/mailgun
-
-      statusDot.className = 'status-dot connecting';
-      statusTitle.textContent = '检查中...';
-      statusDesc.textContent = '正在连接邮箱服务器...';
-
-      try {
-        // Simulate connection (actual IMAP requires server-side)
-        const { server, user, pass, from } = state.config.email;
-
-        if (!server || !user || !pass) {
-          throw new Error('请填写完整的邮箱配置');
-        }
-
-        // In real implementation, this would connect via extension or proxy
-        showToast('浏览器无法直接访问IMAP，请使用扩展或本地代理', 'error');
-
-        statusDot.className = 'status-dot error';
-        statusTitle.textContent = '连接失败';
-        statusDesc.textContent = '浏览器安全限制，请使用扩展或代理';
-
-      } catch (err) {
-        statusDot.className = 'status-dot error';
-        statusTitle.textContent = '错误';
-        statusDesc.textContent = err.message;
-      }
-    }
-
-    connectBtn.addEventListener('click', () => {
-      if (state.emailConnected) {
-        // Disconnect
-        clearInterval(state.emailCheckInterval);
-        state.emailConnected = false;
-        connectBtn.textContent = '连接';
-        statusDot.className = 'status-dot';
-        statusTitle.textContent = '未连接';
-        statusDesc.textContent = '配置邮箱信息后开始监听';
-      } else {
-        // Connect
-        checkEmail();
-
-        // Set up periodic check
-        const interval = (state.config.email.interval || 60) * 1000;
-        state.emailCheckInterval = setInterval(checkEmail, interval);
-        state.emailConnected = true;
-        connectBtn.textContent = '断开';
-      }
-    });
-
-    // Initialize
-    loadConfig();
-    updateFilenamePreview();
-  </script>
-</body>
-</html>
+              <svg viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a
