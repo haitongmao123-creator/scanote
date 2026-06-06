@@ -972,19 +972,20 @@
         <div id="ai-config" style="display:none;">
           <div class="form-group">
             <label>API 端点</label>
-            <input type="url" id="api-endpoint" placeholder="https://api.deepseek.com/v1/chat/completions">
+            <input type="url" id="api-endpoint" placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions" value="https://open.bigmodel.cn/api/paas/v4/chat/completions">
           </div>
           <div class="form-group">
             <label>API Key</label>
-            <input type="password" id="api-key" placeholder="sk-••••••••••••••••">
+            <input type="password" id="api-key" placeholder="请输入智谱AI的API Key">
           </div>
           <div class="form-group">
             <label>模型</label>
-            <input type="text" id="api-model" placeholder="deepseek-v4-flash" value="deepseek-v4-flash">
+            <input type="text" id="api-model" placeholder="glm-4v-flash" value="glm-4v-flash">
           </div>
-          <div class="form-group" style="background: #FFF3CD; padding: 12px; border-radius: 8px; margin-top: 8px;">
-            <div style="font-size: 12px; color: #856404;">
-              💡 提示：AI模式可以识别扫描图片中的文字，需要配置API Key<br>
+          <div class="form-group" style="background: #D4EDDA; padding: 12px; border-radius: 8px; margin-top: 8px;">
+            <div style="font-size: 12px; color: #155724;">
+              💡 推荐使用智谱AI免费模型 glm-4v-flash，支持图片识别<br>
+              📝 注册地址：https://open.bigmodel.cn/<br>
               ⚠️ 注意：大多数API不支持浏览器直接访问（需要CORS代理）
             </div>
           </div>
@@ -1082,9 +1083,9 @@
       config: {
         ai: {
           enabled: false,
-          endpoint: '',
+          endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
           key: '',
-          model: 'gpt-4o-mini'
+          model: 'glm-4v-flash'
         },
         email: {
           server: '',
@@ -1202,7 +1203,7 @@
             $('ai-config').style.gap = '12px';
             $('api-endpoint').value = state.config.ai.endpoint || '';
             $('api-key').value = state.config.ai.key || '';
-            $('api-model').value = state.config.ai.model || 'deepseek-v4-flash';
+            $('api-model').value = state.config.ai.model || 'glm-4v-flash';
           }
 
           // Restore email config
@@ -1364,7 +1365,7 @@
     $('save-api-config').addEventListener('click', () => {
       state.config.ai.endpoint = $('api-endpoint').value;
       state.config.ai.key = $('api-key').value;
-      state.config.ai.model = $('api-model').value || 'deepseek-v4-flash';
+      state.config.ai.model = $('api-model').value || 'glm-4v-flash';
       state.config.ai.enabled = state.aiMode;
       saveConfig();
       showToast('API配置已保存', 'success');
@@ -1628,7 +1629,7 @@
       }
     }
 
-    // AI Mode - Call API
+    // AI Mode - Call API (支持图片识别)
     async function extractTextWithAI(file) {
       const { endpoint, key, model } = state.config.ai;
 
@@ -1638,29 +1639,82 @@
 
       // Validate endpoint format
       if (!endpoint.includes('/v1/chat')) {
-        throw new Error('API端点格式错误，应为: https://api.deepseek.com/v1/chat/completions');
+        throw new Error('API端点格式错误，应为: https://open.bigmodel.cn/api/paas/v4/chat/completions');
       }
 
-      // Convert PDF to text first
-      let rawText;
+      // Try to extract text first
+      let rawText = '';
       try {
         rawText = await extractRawTextFromPDF(file);
       } catch {
         rawText = '';
       }
 
-      // If no text extracted, use filename
-      const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
-      let promptText = rawText;
-      if (!rawText || rawText.trim() === '') {
-        promptText = `文件名: ${filenameWithoutExt}\n(无法提取PDF文本，可能是扫描图片)`;
+      // Convert PDF page to image for vision API
+      let imageBase64 = '';
+      try {
+        const typedarray = new Uint8Array(await file.arrayBuffer());
+        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+        const page = await pdf.getPage(1);
+        
+        const scale = 2; // Higher scale for better quality
+        const viewport = page.getViewport({ scale });
+        
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        
+        await page.render({
+          canvasContext: context,
+          viewport: viewport
+        }).promise;
+        
+        imageBase64 = canvas.toDataURL('image/png').split(',')[1];
+        addDebugInfo('🖼️ 图片转换', `PDF第1页已转换为图片 (${canvas.width}x${canvas.height})`);
+      } catch (err) {
+        addDebugInfo('⚠️ 图片转换失败', err.message);
       }
 
-      const truncatedText = promptText.slice(0, 1000);
+      const filenameWithoutExt = file.name.replace(/\.pdf$/i, '');
 
       try {
         addDebugInfo('🤖 API调用', '发送请求到 ' + endpoint);
-        addDebugInfo('📤 发送内容', truncatedText.slice(0, 300));
+        
+        // Build messages content
+        let messagesContent = [];
+        
+        // Add image if available
+        if (imageBase64) {
+          messagesContent.push({
+            type: 'image_url',
+            image_url: {
+              url: `data:image/png;base64,${imageBase64}`
+            }
+          });
+        }
+        
+        // Add text prompt
+        const textPrompt = rawText && rawText.trim() 
+          ? `文本内容：${rawText.slice(0, 500)}\n\n请根据这张图片中的内容给出一个合适的文档标题（最多10个汉字）。如果图片中有大标题或主要标题文字，请优先使用。`
+          : `文件名：${filenameWithoutExt}\n\n这是一张PDF文档的图片，请识别出其中的大标题或主要标题文字，给出一个合适的文档标题（最多10个汉字）。`;
+        
+        messagesContent.push({
+          type: 'text',
+          text: textPrompt
+        });
+
+        const requestBody = {
+          model: model || 'glm-4v-flash',
+          messages: [{
+            role: 'user',
+            content: messagesContent
+          }],
+          max_tokens: 100,
+          temperature: 0.3
+        };
+
+        addDebugInfo('📤 发送内容', imageBase64 ? '图片+文本' : '仅文本');
 
         const response = await fetch(endpoint, {
           method: 'POST',
@@ -1668,15 +1722,7 @@
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${key}`
           },
-          body: JSON.stringify({
-            model: model || 'deepseek-v4-flash',
-            messages: [{
-              role: 'user',
-              content: `请根据以下信息给出一个合适的文档标题（最多10个汉字），只返回标题文字，不要其他任何解释：\n\n${truncatedText}`
-            }],
-            max_tokens: 100,
-            temperature: 0.3
-          })
+          body: JSON.stringify(requestBody)
         });
 
         if (!response.ok) {
