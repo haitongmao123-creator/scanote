@@ -1691,4 +1691,115 @@
               </svg>
             </button>
             <button class="btn-icon delete" title="删除">
-              <svg viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a
+              <svg viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3m6-3v6m4-6v6"/></svg>
+            </button>
+          </div>
+        </div>
+      `).join('');
+      
+      // Attach event listeners
+      document.querySelectorAll('.file-card .download').forEach(btn => {
+        btn.addEventListener('click', function() {
+          const card = this.closest('.file-card');
+          const id = card.dataset.id;
+          const fileObj = state.files.find(f => f.id == id);
+          if (fileObj) {
+            downloadFile(fileObj);
+          }
+        });
+      });
+      
+      document.querySelectorAll('.file-card .delete').forEach(btn => {
+        btn.addEventListener('click', function() {
+          const card = this.closest('.file-card');
+          const id = card.dataset.id;
+          state.files = state.files.filter(f => f.id != id);
+          renderFileList();
+        });
+      });
+      
+      document.querySelectorAll('.file-card input').forEach(input => {
+        input.addEventListener('change', function() {
+          const card = this.closest('.file-card');
+          const id = card.dataset.id;
+          const fileObj = state.files.find(f => f.id == id);
+          if (fileObj) {
+            fileObj.newName = this.value;
+          }
+        });
+      });
+    }
+
+    // Download file
+    function downloadFile(fileObj) {
+      if (!fileObj.blob) return;
+      
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(fileObj.blob);
+      a.download = fileObj.newName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    }
+
+    // Toast notification
+    function showToast(message, type = 'info') {
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => {
+          if (toast.parentNode) {
+            toast.parentNode.removeChild(toast);
+          }
+        }, 300);
+      }, 3000);
+    }
+
+    // Initialize
+    function init() {
+      // Load config
+      loadConfig();
+      
+      // Set default mode to drag
+      state.mode = 'drag';
+      const dragTab = modeTabs[1];
+      const dragPanel = $('drag-panel');
+      dragTab.classList.add('active');
+      dragPanel.classList.add('active');
+      
+      // Drop zone events
+      dropZone.addEventListener('click', () => fileInput.click());
+      
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+      });
+      
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+      });
+      
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        
+        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+        files.forEach(f => processFile(f));
+      });
+      
+      fileInput.addEventListener('change', (e) => {
+        const files = Array.from(e.target.files).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+        files.forEach(f => processFile(f));
+        fileInput.value = '';
+      });
+    }
+    
+    init();
+  </script>
+</body>
+</html>
