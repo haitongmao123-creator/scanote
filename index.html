@@ -514,11 +514,11 @@
 
     /* File List */
     .file-list {
-      margin-top: 24px;
+      margin-top: 12px;
       display: flex;
       flex-direction: column;
       gap: 12px;
-      min-height: 60px;
+      min-height: 0;
       background: transparent;
       border: none;
       border-radius: 12px;
@@ -527,17 +527,15 @@
     }
 
     .file-list.empty {
-      background: #FAFAFA;
-      border: 1px dashed #E5E7EB;
-      padding: 16px;
-      justify-content: center;
-      align-items: center;
+      background: transparent;
+      border: none;
+      padding: 0;
+      min-height: 0;
     }
 
     .file-list.empty::before {
-      content: '暂无文件';
-      font-size: 14px;
-      color: #9CA3AF;
+      content: '';
+      display: none;
     }
 
     .file-card {
