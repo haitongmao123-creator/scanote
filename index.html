@@ -1773,7 +1773,7 @@
       }
 
       // Validate endpoint format
-      if (!endpoint.includes('/v1/chat')) {
+      if (!endpoint.includes('/v1/chat') && !endpoint.includes('/v4/chat')) {
         throw new Error('API端点格式错误，应为: https://open.bigmodel.cn/api/paas/v4/chat/completions');
       }
 
@@ -2099,12 +2099,22 @@
         e.preventDefault();
         dropZone.classList.remove('dragover');
         
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+        const files = Array.from(e.dataTransfer.files).filter(f => 
+          f.type === 'application/pdf' || 
+          f.name.toLowerCase().endsWith('.pdf') ||
+          f.name.toLowerCase().endsWith('.doc') ||
+          f.name.toLowerCase().endsWith('.docx')
+        );
         files.forEach(f => processFile(f));
       });
       
       fileInput.addEventListener('change', (e) => {
-        const files = Array.from(e.target.files).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+        const files = Array.from(e.target.files).filter(f => 
+          f.type === 'application/pdf' || 
+          f.name.toLowerCase().endsWith('.pdf') ||
+          f.name.toLowerCase().endsWith('.doc') ||
+          f.name.toLowerCase().endsWith('.docx')
+        );
         files.forEach(f => processFile(f));
         fileInput.value = '';
       });
