@@ -1844,11 +1844,23 @@
         // Add text prompt
         let textPrompt = '';
         if (isWord) {
-          textPrompt = `文件名：${filenameWithoutExt}\n\n这是一个Word文档，请根据文件名推测一个合适的文档标题（最多10个汉字）。`;
-        } else if (rawText && rawText.trim()) {
-          textPrompt = `文本内容：${rawText.slice(0, 500)}\n\n请根据这张图片中的内容给出一个合适的文档标题（最多10个汉字）。如果图片中有大标题或主要标题文字，请优先使用。`;
+          textPrompt = `文件名：${filenameWithoutExt}\n\n这是一个Word文档，请分析内容并提取：
+1. 标题名（必填，如"交易申请表"、"开户申请表"等）
+2. 产品名（可选，如"xxxx私募证券投资基金"等基金/产品名称）
+
+输出格式要求：
+- 如果只有标题，直接输出：标题名
+- 如果有标题+产品名，输出：标题名-产品名
+- 最多20个汉字，只返回命名不要其他解释`;
         } else {
-          textPrompt = `文件名：${filenameWithoutExt}\n\n这是一张PDF文档的图片，请识别出其中的大标题或主要标题文字，给出一个合适的文档标题（最多10个汉字）。`;
+          textPrompt = `请分析这张文档图片并提取：
+1. 标题名（必填，识别最显眼的大标题）
+2. 产品名（可选，如"xxxx私募证券投资基金"等基金/产品名称）
+
+输出格式要求：
+- 如果只有标题，直接输出：标题名
+- 如果有标题+产品名，输出：标题名-产品名
+- 最多20个汉字，只返回命名不要其他解释${rawText && rawText.trim() ? '\n\n辅助文本：' + rawText.slice(0, 300) : ''}`;
         }
         
         messagesContent.push({
