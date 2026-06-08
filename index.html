@@ -1836,23 +1836,27 @@
         // Add text prompt
         let textPrompt = '';
         if (isWord) {
-          textPrompt = `文件名：${filenameWithoutExt}\n\n这是一个Word文档，请分析内容并提取：
-1. 标题名（必填，如"交易申请表"、"开户申请表"等）
-2. 产品名（可选，如"xxxx私募证券投资基金"等基金/产品名称）
+          textPrompt = `文件名：${filenameWithoutExt}\n\n这是一个Word文档，请直接分析内容并返回结果，不要任何思考过程。
 
-输出格式要求：
-- 如果只有标题，直接输出：标题名
-- 如果有标题+产品名，输出：标题名-产品名
-- 只返回命名不要其他解释`;
+需要提取：
+1. 标题名（必填，识别最显眼的大标题，如"交易申请表"、"开户申请表"等）
+2. 产品名（可选，如"xxxx私募证券投资基金"等基金/产品全称）
+
+输出格式：
+- 只有标题 → 输出：标题名
+- 标题+产品名 → 输出：标题名-产品名
+- 只返回最终命名，不要解释、不要引号、不要任何其他内容！`;
         } else {
-          textPrompt = `请分析这张文档图片并提取：
-1. 标题名（必填，识别最显眼的大标题）
-2. 产品名（可选，如"xxxx私募证券投资基金"等基金/产品名称）
+          textPrompt = `请直接分析这张文档图片并返回结果，不要任何思考过程。
 
-输出格式要求：
-- 如果只有标题，直接输出：标题名
-- 如果有标题+产品名，输出：标题名-产品名
-- 只返回命名不要其他解释${rawText && rawText.trim() ? '\n\n辅助文本：' + rawText.slice(0, 300) : ''}`;
+需要提取：
+1. 标题名（必填，识别最显眼的大标题）
+2. 产品名（可选，如"xxxx私募证券投资基金"等基金/产品全称）
+
+输出格式：
+- 只有标题 → 输出：标题名
+- 标题+产品名 → 输出：标题名-产品名
+- 只返回最终命名，不要解释、不要引号、不要任何其他内容！${rawText && rawText.trim() ? '\n\n辅助文本：' + rawText.slice(0, 300) : ''}`;
         }
         
         messagesContent.push({
@@ -1866,8 +1870,11 @@
             role: 'user',
             content: messagesContent
           }],
-          max_tokens: 100,
-          temperature: 0.3
+          max_tokens: 200,
+          temperature: 0.1,
+          thinking: {
+            type: "disabled"
+          }
         };
 
         addDebugInfo('📤 发送内容', imageBase64 ? '图片+文本' : '仅文本');
@@ -1894,15 +1901,32 @@
         }
 
         const data = await response.json();
-        addDebugInfo('📥 API响应', JSON.stringify(data).slice(0, 300));
+        addDebugInfo('📥 API响应', JSON.stringify(data).slice(0, 500));
 
-        let title = data.choices?.[0]?.message?.content?.trim() || '';
+        let title = '';
+        
+        // 尝试多种方式获取响应内容
+        const message = data.choices?.[0]?.message;
+        if (message) {
+          title = message.content?.trim() || '';
+          // 如果有thinking内容，尝试从thinking中提取
+          if (!title && message.reasoning_content) {
+            addDebugInfo('💡 发现thinking内容，尝试提取', message.reasoning_content.slice(0, 200));
+            // 从thinking中寻找最后可能包含标题的句子
+            const thinking = message.reasoning_content;
+            // 匹配类似"标题名-产品名"的格式
+            const match = thinking.match(/([^\n。！？，；：]{3,50}-[^\n。！？，；：]{3,50}|[^\n。！？，；：]{5,50})$/);
+            if (match) {
+              title = match[1].trim();
+            }
+          }
+        }
 
         // Clean up the title
         title = title.replace(/[""''""']/g, '').replace(/[。！？，、；：\.\?!,;:]$/, '').trim();
 
         // Fallback to filename if title is still empty
-        if (!title || title === '未识别' || title === '未命名') {
+        if (!title || title === '未识别' || title === '未命名' || title.length < 2) {
           title = filenameWithoutExt;
         }
 
