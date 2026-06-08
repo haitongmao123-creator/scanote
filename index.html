@@ -1582,40 +1582,119 @@
         else if (textBlocks.length > 0) {
           // 按Y坐标降序排序（Y越大越靠上）
           const sortedByY = [...textBlocks].sort((a, b) => b.y - a.y);
-          addDebugInfo('🔍 按位置排序（顶部优先）', sortedByY.slice(0, 5).map(b => `Y=${Math.round(b.y)} ${b.fontSize}px: ${b.text}`).join('\n'));
+          addDebugInfo('🔍 按位置排序（顶部优先）', sortedByY.slice(0, 8).map(b => `Y=${Math.round(b.y)} ${b.fontSize}px: ${b.text}`).join('\n'));
           
-          // 计算页面顶部区域（前30%的文本块）
-          const topThreshold = sortedByY[0]?.y ? sortedByY[0].y * 0.7 : 300;
+          // 计算页面顶部区域（前40%的文本块）
+          const topThreshold = sortedByY[0]?.y ? sortedByY[0].y * 0.6 : 300;
           const topAreaBlocks = sortedByY.filter(b => b.y > topThreshold);
           addDebugInfo('📍 顶部区域文本块', `${topAreaBlocks.length} 个，阈值: ${Math.round(topThreshold)}`);
           
-          // 在顶部区域中按字体大小排序
-          const topSortedByFont = [...topAreaBlocks].sort((a, b) => b.fontSize - a.fontSize);
-          addDebugInfo('🔤 顶部区域按字体大小排序', topSortedByFont.slice(0, 3).map(b => `${b.fontSize}px: ${b.text}`).join('\n'));
+          // 尝试合并顶部区域的相邻文本块（防止标题被分割）
+          let mergedBlocks = [];
+          if (topAreaBlocks.length > 0) {
+            let currentMerge = { text: topAreaBlocks[0].text, fontSize: topAreaBlocks[0].fontSize, y: topAreaBlocks[0].y };
+            for (let i = 1; i < topAreaBlocks.length; i++) {
+              const prev = topAreaBlocks[i - 1];
+              const curr = topAreaBlocks[i];
+              // 如果位置相近（Y差小于30），合并
+              if (Math.abs(prev.y - curr.y) < 30 && Math.abs(prev.fontSize - curr.fontSize) < 3) {
+                currentMerge.text += curr.text;
+              } else {
+                mergedBlocks.push(currentMerge);
+                currentMerge = { text: curr.text, fontSize: curr.fontSize, y: curr.y };
+              }
+            }
+            mergedBlocks.push(currentMerge);
+            addDebugInfo('🔗 合并后的文本块', mergedBlocks.slice(0, 5).map(b => `${b.fontSize}px: ${b.text}`).join('\n'));
+          }
           
-          // 找字体最大且长度合适的文本作为标题
-          for (const block of topSortedByFont) {
-            if (block.text.length > 3 && block.text.length < 100) {
-              // 检查是否包含常见标题关键词
-              const titleKeywords = ['考试', '合格', '成绩', '证书', '证明', '报告', '通知', '决定', '批复', '申请'];
-              const hasKeyword = titleKeywords.some(kw => block.text.includes(kw));
-              
-              if (hasKeyword || block.fontSize >= 14 || block.y > topThreshold + 50) {
-                extractedTitle = block.text;
-                addDebugInfo('✅ 使用顶部大字体标题', `${block.fontSize}px Y=${Math.round(block.y)}: ${extractedTitle}`);
+          // 标题关键词（优先级从高到低）
+          const highPriorityKeywords = ['申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '协议', '合同', '承诺书'];
+          const mediumPriorityKeywords = ['申请', '表', '系统', '通知书', '告知书', '确认书', '声明书', '证明', '证书'];
+          const lowPriorityKeywords = ['考试', '合格', '成绩', '报告', '通知', '决定', '批复'];
+          
+          // 在合并后的块和原始块中都寻找
+          const allCandidateBlocks = [...new Map([
+            ...mergedBlocks.map(b => [b.text, b]),
+            ...topAreaBlocks.map(b => [b.text, b])
+          ]).values()];
+          
+          // 1. 优先找包含高优先级关键词的
+          for (const block of allCandidateBlocks) {
+            if (block.text.length > 5 && block.text.length < 150) {
+              const hasHighKeyword = highPriorityKeywords.some(kw => block.text.includes(kw));
+              if (hasHighKeyword) {
+                // 清理前缀（如"附表："、"1. "等）
+                let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
+                if (cleanText.length > 3) {
+                  extractedTitle = cleanText;
+                } else {
+                  extractedTitle = block.text;
+                }
+                addDebugInfo('✅ 高优先级关键词标题', `${block.fontSize}px Y=${Math.round(block.y)}: ${extractedTitle}`);
                 break;
               }
             }
           }
           
-          // 如果没找到，找页面最顶部的文本（不限制字体大小）
+          // 2. 找包含中优先级关键词的
           if (!extractedTitle) {
-            for (const block of sortedByY.slice(0, 15)) {
+            for (const block of allCandidateBlocks) {
+              if (block.text.length > 5 && block.text.length < 150) {
+                const hasMediumKeyword = mediumPriorityKeywords.some(kw => block.text.includes(kw));
+                if (hasMediumKeyword) {
+                  let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
+                  if (cleanText.length > 3) {
+                    extractedTitle = cleanText;
+                  } else {
+                    extractedTitle = block.text;
+                  }
+                  addDebugInfo('✅ 中优先级关键词标题', `${block.fontSize}px Y=${Math.round(block.y)}: ${extractedTitle}`);
+                  break;
+                }
+              }
+            }
+          }
+          
+          // 3. 在顶部区域中按字体大小排序，找字体最大且长度合适的
+          if (!extractedTitle) {
+            const topSortedByFont = [...topAreaBlocks].sort((a, b) => b.fontSize - a.fontSize);
+            addDebugInfo('🔤 顶部区域按字体大小排序', topSortedByFont.slice(0, 3).map(b => `${b.fontSize}px: ${b.text}`).join('\n'));
+            
+            for (const block of topSortedByFont) {
               if (block.text.length > 3 && block.text.length < 100) {
-                // 跳过纯数字或日期
-                if (!/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && 
-                    !/^\d{8}$/.test(block.text)) {
-                  extractedTitle = block.text;
+                // 检查是否包含常见标题关键词
+                const hasKeyword = lowPriorityKeywords.some(kw => block.text.includes(kw));
+                const isNotDate = !/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && !/^\d{8}$/.test(block.text);
+                
+                if ((hasKeyword || block.fontSize >= 14 || block.y > topThreshold + 50) && isNotDate) {
+                  let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
+                  if (cleanText.length > 3) {
+                    extractedTitle = cleanText;
+                  } else {
+                    extractedTitle = block.text;
+                  }
+                  addDebugInfo('✅ 使用顶部大字体标题', `${block.fontSize}px Y=${Math.round(block.y)}: ${extractedTitle}`);
+                  break;
+                }
+              }
+            }
+          }
+          
+          // 4. 如果没找到，找页面最顶部的文本（不限制字体大小）
+          if (!extractedTitle) {
+            for (const block of sortedByY.slice(0, 20)) {
+              if (block.text.length > 3 && block.text.length < 100) {
+                const isNotDate = !/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && !/^\d{8}$/.test(block.text);
+                const isNotNumber = !/^\d+$/.test(block.text.replace(/\s/g, ''));
+                
+                if (isNotDate && isNotNumber) {
+                  let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
+                  if (cleanText.length > 3) {
+                    extractedTitle = cleanText;
+                  } else {
+                    extractedTitle = block.text;
+                  }
                   addDebugInfo('✅ 使用页面最顶部文本', `Y=${Math.round(block.y)}: ${extractedTitle}`);
                   break;
                 }
@@ -1623,14 +1702,24 @@
             }
           }
           
-          // 如果还是没找到，尝试字体最大的
+          // 5. 如果还是没找到，尝试字体最大的
           if (!extractedTitle) {
             const sortedByFont = [...textBlocks].sort((a, b) => b.fontSize - a.fontSize);
             for (const block of sortedByFont) {
               if (block.text.length > 3 && block.text.length < 100) {
-                extractedTitle = block.text;
-                addDebugInfo('✅ 使用字体最大的文本', `${block.fontSize}px: ${extractedTitle}`);
-                break;
+                const isNotDate = !/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && !/^\d{8}$/.test(block.text);
+                const isNotNumber = !/^\d+$/.test(block.text.replace(/\s/g, ''));
+                
+                if (isNotDate && isNotNumber) {
+                  let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
+                  if (cleanText.length > 3) {
+                    extractedTitle = cleanText;
+                  } else {
+                    extractedTitle = block.text;
+                  }
+                  addDebugInfo('✅ 使用字体最大的文本', `${block.fontSize}px: ${extractedTitle}`);
+                  break;
+                }
               }
             }
           }
