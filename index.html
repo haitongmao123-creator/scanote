@@ -1159,7 +1159,7 @@
       return `${y}${m}${d}`;
     }
 
-    function truncateChinese(text, maxChars = 10) {
+    function truncateChinese(text, maxChars = 20) {
       let count = 0;
       let result = '';
       for (const char of text) {
@@ -1532,12 +1532,12 @@
             .trim();
           
           // 如果文件名太长，截取前部分
-          if (title.length > 20) {
-            title = title.slice(0, 20);
+          if (title.length > 40) {
+            title = title.slice(0, 40);
           }
           
           addDebugInfo('✅ 使用文件名作为标题', title);
-          return truncateChinese(title, 10) || '未命名';
+          return truncateChinese(title, 20) || '未命名';
         }
 
         // 2. 尝试提取PDF文本（带字体大小信息）
@@ -1754,13 +1754,13 @@
         
         addDebugInfo('🏷️ 最终标题', finalTitle);
 
-        return truncateChinese(finalTitle, 10) || '未命名';
+        return truncateChinese(finalTitle, 20) || '未命名';
       } catch (err) {
         addDebugInfo('❌ 本地识别失败', err.message);
         // Fallback to filename
         const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
         addDebugInfo('⚠️ 回退到文件名', filenameWithoutExt);
-        return truncateChinese(filenameWithoutExt, 10) || '未命名';
+        return truncateChinese(filenameWithoutExt, 20) || '未命名';
       }
     }
 
@@ -1903,7 +1903,7 @@
         }
 
         addDebugInfo('🏷️ AI生成标题', title);
-        return truncateChinese(title, 10);
+        return truncateChinese(title, 20);
       } catch (err) {
         addDebugInfo('❌ AI模式失败', err.message);
         if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
@@ -1971,7 +1971,7 @@
         addDebugInfo('❌ 处理失败', err.message);
         // 最后的兜底方案：使用原文件名
         const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
-        const title = truncateChinese(filenameWithoutExt, 10) || '未命名';
+        const title = truncateChinese(filenameWithoutExt, 20) || '未命名';
         fileObj.title = title;
         const { prefix, title: titleRule, date } = state.config.naming;
         const parts = [];
