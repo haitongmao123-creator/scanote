@@ -1159,16 +1159,8 @@
       return `${y}${m}${d}`;
     }
 
-    function truncateChinese(text, maxChars = 20) {
-      let count = 0;
-      let result = '';
-      for (const char of text) {
-        if (/[\u4e00-\u9fa5]/.test(char)) count += 1;
-        else count += 0.5;
-        if (count > maxChars) break;
-        result += char;
-      }
-      return result;
+    function truncateChinese(text, maxChars = 100) {
+      return text; // 不再限制字数，直接返回原文
     }
 
     // Preview filename
@@ -1851,7 +1843,7 @@
 输出格式要求：
 - 如果只有标题，直接输出：标题名
 - 如果有标题+产品名，输出：标题名-产品名
-- 最多20个汉字，只返回命名不要其他解释`;
+- 只返回命名不要其他解释`;
         } else {
           textPrompt = `请分析这张文档图片并提取：
 1. 标题名（必填，识别最显眼的大标题）
@@ -1860,7 +1852,7 @@
 输出格式要求：
 - 如果只有标题，直接输出：标题名
 - 如果有标题+产品名，输出：标题名-产品名
-- 最多20个汉字，只返回命名不要其他解释${rawText && rawText.trim() ? '\n\n辅助文本：' + rawText.slice(0, 300) : ''}`;
+- 只返回命名不要其他解释${rawText && rawText.trim() ? '\n\n辅助文本：' + rawText.slice(0, 300) : ''}`;
         }
         
         messagesContent.push({
