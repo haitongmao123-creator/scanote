@@ -1134,9 +1134,22 @@
 
     // Utility Functions
     function showToast(message, type = 'default') {
-      toast.textContent = message;
-      toast.className = 'toast show' + (type !== 'default' ? ' ' + type : '');
-      setTimeout(() => toast.classList.remove('show'), 3000);
+      const toastEl = document.getElementById('toast');
+      if (toastEl) {
+        toastEl.textContent = message;
+        toastEl.className = 'toast show' + (type !== 'default' ? ' ' + type : '');
+        setTimeout(() => toastEl.classList.remove('show'), 3000);
+      } else {
+        // Fallback: create toast element
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+          toast.style.opacity = '0';
+          setTimeout(() => toast.remove(), 300);
+        }, 3000);
+      }
     }
 
     function formatDate(date = new Date()) {
@@ -1364,9 +1377,22 @@
       state.config.ai.endpoint = $('api-endpoint').value;
       state.config.ai.key = $('api-key').value;
       state.config.ai.model = $('api-model').value || 'glm-4v-flash';
-      state.config.ai.enabled = state.aiMode;
+      
+      // 如果填写了API Key，自动启用AI模式
+      if ($('api-key').value.trim()) {
+        state.aiMode = true;
+        state.config.ai.enabled = true;
+        $('ai-mode-toggle').classList.add('active');
+        $('ai-config').style.display = 'grid';
+        $('ai-config').style.gridTemplateColumns = '1fr';
+        $('ai-config').style.gap = '12px';
+        showToast('API配置已保存，AI模式已启用', 'success');
+      } else {
+        state.config.ai.enabled = state.aiMode;
+        showToast('API配置已保存', 'success');
+      }
+      
       saveConfig();
-      showToast('API配置已保存', 'success');
     });
 
     // Save email config
@@ -1954,23 +1980,6 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(a.href);
-    }
-
-    // Toast notification
-    function showToast(message, type = 'info') {
-      const toast = document.createElement('div');
-      toast.className = `toast ${type}`;
-      toast.textContent = message;
-      document.body.appendChild(toast);
-      
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => {
-          if (toast.parentNode) {
-            toast.parentNode.removeChild(toast);
-          }
-        }, 300);
-      }, 3000);
     }
 
     // Initialize
