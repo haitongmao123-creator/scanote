@@ -18,7 +18,3 @@
 3. 点击下载获取重命名后的文件
 
 如需使用 AI 模式，请在设置中填写智谱 AI 的 API Key（免费申请：https://open.bigmodel.cn/）
-
-## 技术栈
-
-纯前端，无需后端。PDF.js 处理 PDF，智谱 AI API 提供智能识别。
