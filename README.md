@@ -1,4 +1,4 @@
-# scanote
+# 识笺 - Scanote
 
 一个智能 PDF/Word 文档识别与命名工具，支持本地模式和 AI 模式。
 
