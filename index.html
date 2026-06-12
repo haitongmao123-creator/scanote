@@ -852,8 +852,8 @@
 
     <!-- Mode Tabs -->
     <div class="mode-tabs">
-      <button class="mode-tab active" data-mode="email">邮箱模式</button>
-      <button class="mode-tab" data-mode="drag">拖拽模式</button>
+      <button class="mode-tab" data-mode="email">邮箱模式</button>
+      <button class="mode-tab active" data-mode="drag">拖拽模式</button>
     </div>
 
     <!-- Email Mode Panel -->
@@ -915,7 +915,7 @@
     </div>
 
     <!-- Drag Mode Panel -->
-    <div class="panel" id="drag-panel">
+    <div class="panel active" id="drag-panel">
       <div class="drop-zone" id="drop-zone">
         <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
@@ -2106,8 +2106,12 @@
       
       // Set default mode to drag
       state.mode = 'drag';
+      const emailTab = modeTabs[0];
+      const emailPanel = $('email-panel');
       const dragTab = modeTabs[1];
       const dragPanel = $('drag-panel');
+      emailTab.classList.remove('active');
+      emailPanel.classList.remove('active');
       dragTab.classList.add('active');
       dragPanel.classList.add('active');
       
