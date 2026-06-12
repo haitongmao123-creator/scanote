@@ -984,6 +984,7 @@
             <div style="font-size: 12px; color: #155724;">
               💡 推荐使用智谱AI免费模型 glm-4v-flash，支持图片识别<br>
               📝 注册地址：https://open.bigmodel.cn/<br>
+              🔐 你的API Key自动保存在浏览器本地，不会上传到任何地方<br>
               ⚠️ 注意：大多数API不支持浏览器直接访问（需要CORS代理）
             </div>
           </div>
@@ -1197,6 +1198,11 @@
           const parsed = JSON.parse(saved);
           state.config = { ...state.config, ...parsed };
 
+          // 恢复API配置（始终填充，不受AI开关影响）
+          $('api-endpoint').value = state.config.ai.endpoint || 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+          $('api-key').value = state.config.ai.key || '';
+          $('api-model').value = state.config.ai.model || 'glm-4v-flash';
+
           // Restore AI mode
           if (state.config.ai.enabled) {
             state.aiMode = true;
@@ -1204,9 +1210,6 @@
             $('ai-config').style.display = 'grid';
             $('ai-config').style.gridTemplateColumns = '1fr';
             $('ai-config').style.gap = '12px';
-            $('api-endpoint').value = state.config.ai.endpoint || '';
-            $('api-key').value = state.config.ai.key || '';
-            $('api-model').value = state.config.ai.model || 'glm-4v-flash';
           }
 
           // Restore email config
@@ -1385,6 +1388,25 @@
       }
       
       saveConfig();
+    });
+
+    // API配置自动保存（输入即保存，无需点按钮）
+    ['api-endpoint', 'api-key', 'api-model'].forEach(id => {
+      $(id).addEventListener('input', function() {
+        state.config.ai.endpoint = $('api-endpoint').value;
+        state.config.ai.key = $('api-key').value;
+        state.config.ai.model = $('api-model').value || 'glm-4v-flash';
+        // 如果填写了API Key，自动启用AI模式
+        if ($('api-key').value.trim()) {
+          state.aiMode = true;
+          state.config.ai.enabled = true;
+          $('ai-mode-toggle').classList.add('active');
+          $('ai-config').style.display = 'grid';
+          $('ai-config').style.gridTemplateColumns = '1fr';
+          $('ai-config').style.gap = '12px';
+        }
+        saveConfig();
+      });
     });
 
     // Save email config
