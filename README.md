@@ -1,4 +1,4 @@
-# 识笺 - Scannote
+# scanote
 
 一个智能PDF/Word文档识别与命名工具，支持本地模式和AI模式。
 
@@ -42,7 +42,7 @@ python3 -m http.server 8080
 1. Fork本仓库
 2. 进入仓库 Settings → Pages
 3. 选择部署源为 `main` 分支和 `/root` 目录
-4. 保存后几分钟即可通过 `https://你的用户名.github.io/识笺/` 访问
+4. 保存后几分钟即可通过 `https://你的用户名.github.io/scanote/` 访问
 
 ## 技术栈
 

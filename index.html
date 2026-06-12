@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>识笺 - Scannote</title>
+  <title>scanote</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -845,8 +845,8 @@
         </svg>
       </div>
       <div class="brand">
-        <h1>识笺</h1>
-        <span>Scannote</span>
+        <h1>scanote</h1>
+        <span>scanote</span>
       </div>
     </header>
 
@@ -1060,7 +1060,7 @@
 
     <!-- Footer -->
     <footer>
-      <p>识笺 · Scannote</p>
+      <p>scanote</p>
     </footer>
   </div>
 
@@ -1191,7 +1191,7 @@
 
     // Load/Save config
     function loadConfig() {
-      const saved = localStorage.getItem('scannote_config');
+      const saved = localStorage.getItem('scanote_config');
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
@@ -1236,7 +1236,7 @@
     }
 
     function saveConfig() {
-      localStorage.setItem('scannote_config', JSON.stringify(state.config));
+      localStorage.setItem('scanote_config', JSON.stringify(state.config));
     }
 
     // Mode switching
@@ -1960,9 +1960,9 @@
       };
 
       state.files.push(fileObj);
-      console.log('[识笺] 文件已添加到列表，当前文件数量:', state.files.length);
+      console.log('[scanote] 文件已添加到列表，当前文件数量:', state.files.length);
       renderFileList();
-      console.log('[识笺] 文件列表已渲染');
+      console.log('[scanote] 文件列表已渲染');
 
       try {
         clearDebugInfo();
