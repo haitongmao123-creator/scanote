@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     * {
       margin: 0;
@@ -691,6 +692,64 @@
 
     .btn-icon.delete svg {
       fill: var(--error);
+    }
+
+    /* Batch toolbar */
+    .batch-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 0 4px;
+    }
+
+    .batch-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: white;
+      color: var(--text);
+      cursor: pointer;
+      transition: var(--transition);
+      font-family: inherit;
+    }
+
+    .batch-btn:hover:not(:disabled) {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-light);
+    }
+
+    .batch-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .batch-btn.primary {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    .batch-btn.primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+      color: white;
+    }
+
+    .batch-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .batch-count {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-left: auto;
     }
 
     /* Email Panel */
@@ -2845,6 +2904,33 @@
         </div>
       </div>
 
+      <!-- Batch Toolbar -->
+      <div class="batch-toolbar" id="batch-toolbar" style="display:none;">
+        <button class="batch-btn primary" id="btn-download-all">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          全部下载 (ZIP)
+        </button>
+        <button class="batch-btn" id="btn-copy-names">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+          复制全部名称
+        </button>
+        <button class="batch-btn" id="btn-clear-all">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+          </svg>
+          清空
+        </button>
+        <span class="batch-count" id="batch-count"></span>
+      </div>
+
       <div class="file-list" id="file-list"></div>
     </div>
 
@@ -3921,14 +4007,31 @@
 
     // Render file list
     function renderFileList() {
+      // Update batch toolbar visibility
+      const toolbar = $('batch-toolbar');
+      toolbar.style.display = state.files.length > 0 ? 'flex' : 'none';
+
+      // Update batch count
+      const completed = state.files.filter(f => f.status === 'success').length;
+      const processing = state.files.filter(f => f.status === 'processing').length;
+      const failed = state.files.filter(f => f.status === 'error').length;
+      const countParts = [];
+      if (completed) countParts.push(`${completed} 已完成`);
+      if (processing) countParts.push(`${processing} 处理中`);
+      if (failed) countParts.push(`${failed} 失败`);
+      $('batch-count').textContent = countParts.join(' | ');
+
+      // Update button states
+      $('btn-download-all').disabled = completed === 0;
+
       // Update empty state class
       fileList.classList.toggle('empty', state.files.length === 0);
-      
+
       if (state.files.length === 0) {
         fileList.innerHTML = '';
         return;
       }
-      
+
       fileList.innerHTML = state.files.map(f => `
         <div class="file-card" data-id="${f.id}">
           <div class="file-icon">
@@ -3955,7 +4058,7 @@
           </div>
         </div>
       `).join('');
-      
+
       // Attach event listeners
       document.querySelectorAll('.file-card .download').forEach(btn => {
         btn.addEventListener('click', function() {
@@ -3967,7 +4070,7 @@
           }
         });
       });
-      
+
       document.querySelectorAll('.file-card .delete').forEach(btn => {
         btn.addEventListener('click', function() {
           const card = this.closest('.file-card');
@@ -3976,7 +4079,7 @@
           renderFileList();
         });
       });
-      
+
       document.querySelectorAll('.file-card input').forEach(input => {
         input.addEventListener('change', function() {
           const card = this.closest('.file-card');
@@ -3987,6 +4090,84 @@
           }
         });
       });
+    }
+
+    // Batch download all completed files as ZIP
+    async function downloadAllAsZip() {
+      const completed = state.files.filter(f => f.status === 'success' && f.blob);
+      if (completed.length === 0) return;
+
+      showToast(`正在打包 ${completed.length} 个文件...`, 'info');
+
+      try {
+        const zip = new JSZip();
+        const usedNames = {};
+
+        for (const f of completed) {
+          let name = f.newName;
+          // Handle duplicate names
+          if (usedNames[name]) {
+            const base = name.replace(/\.[^.]+$/, '');
+            const ext = name.match(/\.[^.]+$/)?.[0] || '';
+            let counter = usedNames[name];
+            name = `${base}_${counter}${ext}`;
+            usedNames[f.newName]++;
+          } else {
+            usedNames[f.newName] = 1;
+          }
+
+          const arrayBuffer = await f.blob.arrayBuffer();
+          zip.file(name, arrayBuffer);
+        }
+
+        const content = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `识笺_批量下载_${formatDate()}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showToast(`已打包 ${completed.length} 个文件`, 'success');
+      } catch (err) {
+        showToast('打包失败: ' + err.message, 'error');
+      }
+    }
+
+    // Copy all file names
+    async function copyAllNames() {
+      const completed = state.files.filter(f => f.status === 'success');
+      if (completed.length === 0) {
+        showToast('没有已完成的文件', 'info');
+        return;
+      }
+
+      const names = completed.map(f => f.newName).join('\n');
+
+      try {
+        await navigator.clipboard.writeText(names);
+        showToast(`已复制 ${completed.length} 个文件名`, 'success');
+      } catch (err) {
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = names;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast(`已复制 ${completed.length} 个文件名`, 'success');
+      }
+    }
+
+    // Clear all files
+    function clearAllFiles() {
+      if (state.files.length === 0) return;
+      state.files = [];
+      renderFileList();
+      clearDebugInfo();
+      showToast('已清空全部文件', 'info');
     }
 
     // Download file
@@ -4000,6 +4181,23 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(a.href);
+    }
+
+    // Batch process files sequentially
+    async function processBatchFiles(files) {
+      if (files.length === 0) return;
+      showToast(`开始处理 ${files.length} 个文件`, 'info');
+
+      for (const file of files) {
+        try {
+          await processFile(file);
+        } catch (err) {
+          console.error('处理文件失败:', file.name, err);
+        }
+      }
+
+      const successCount = state.files.filter(f => f.status === 'success').length;
+      showToast(`处理完成：${successCount}/${files.length} 个成功`, 'success');
     }
 
     // Initialize
@@ -4036,7 +4234,7 @@
           f.name.toLowerCase().endsWith('.doc') ||
           f.name.toLowerCase().endsWith('.docx')
         );
-        files.forEach(f => processFile(f));
+        processBatchFiles(files);
       });
       
       fileInput.addEventListener('change', (e) => {
@@ -4046,9 +4244,14 @@
           f.name.toLowerCase().endsWith('.doc') ||
           f.name.toLowerCase().endsWith('.docx')
         );
-        files.forEach(f => processFile(f));
+        processBatchFiles(files);
         fileInput.value = '';
       });
+
+      // Batch toolbar buttons
+      $('btn-download-all').addEventListener('click', downloadAllAsZip);
+      $('btn-copy-names').addEventListener('click', copyAllNames);
+      $('btn-clear-all').addEventListener('click', clearAllFiles);
     }
     
     init();
