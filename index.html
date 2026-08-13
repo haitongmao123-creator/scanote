@@ -3525,7 +3525,7 @@
       });
     }
 
-    // OCR识别（扫描型PDF）- 使用Tesseract.js本地识别，仅识别第1页
+    // OCR识别（扫描型PDF）- 仅识别上半部分提升速度
     async function performOCR(file) {
       try {
         const typedarray = new Uint8Array(await file.arrayBuffer());
@@ -3534,14 +3534,25 @@
 
         const scale = 1.5;
         const viewport = page.getViewport({ scale });
+        const fullHeight = viewport.height;
+        // 只识别上半部分（前55%高度），标题一定在顶部
+        const cropHeight = Math.floor(fullHeight * 0.55);
+
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
-        canvas.height = viewport.height;
+        canvas.height = cropHeight;
         canvas.width = viewport.width;
-        await page.render({ canvasContext: context, viewport }).promise;
-        addDebugInfo('🖼️ 渲染页面', `第1页 ${canvas.width}x${canvas.height}`);
 
-        addDebugInfo('🔍 启动本地OCR', '识别第1页（中英文）...');
+        // 渲染时裁剪到上半部分
+        await page.render({
+          canvasContext: context,
+          viewport: viewport,
+          transform: (scale === 1.5) ? [1.5, 0, 0, 1.5, 0, 0] : undefined,
+          clip: { x: 0, y: 0, width: viewport.width, height: cropHeight }
+        }).promise;
+        addDebugInfo('🖼️ 渲染页面（上半部分）', `${canvas.width}x${canvas.height}`);
+
+        addDebugInfo('🔍 启动本地OCR', '识别第1页上半部分...');
 
         let lastProgress = -1;
         const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1, {
@@ -3561,7 +3572,6 @@
         await worker.terminate();
 
         let pageText = result.data.text || '';
-        // 清理OCR文本
         pageText = pageText.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
         // 去掉中文之间的空格
         pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
@@ -3569,7 +3579,7 @@
         pageText = pageText.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
         pageText = pageText.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
 
-        addDebugInfo('📝 OCR结果(第1页,清理后)', pageText.slice(0, 300));
+        addDebugInfo('📝 OCR结果(清理后)', pageText.slice(0, 300));
 
         return pageText;
       } catch (err) {
@@ -3582,8 +3592,13 @@
     function extractTitleFromOCRText(text) {
       if (!text || text.trim().length === 0) return '';
 
-      // 标题关键词
-      const highPriorityKeywords = [
+      // 标题关键词（按长度降序，优先匹配长词）
+      const rawKeywords = [
+        '授权委托书', '承诺书和风险提示书', '承诺书和风险揭示书',
+        '接入外部信息系统', '业务确认书', '交易确认书',
+        '开户合同', '开户协议', '开户申请书', '交易申请书', '交易协议',
+        '托管协议', '托管合同', '顾问协议', '顾问合同', '合伙协议',
+        '委托协议', '委托合同', '服务协议', '服务合同',
         '申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '调查表', '汇总表',
         '协议', '合同', '契约', '协议书',
         '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
@@ -3605,70 +3620,75 @@
         '意向书', '谅解备忘录', '合作备忘录', '备忘录', '要约',
         '决议', '纪要', '公告', '通报'
       ];
+      // 去重并按长度降序
+      const highPriorityKeywords = [...new Set(rawKeywords)].sort((a, b) => b.length - a.length);
 
       // 按行分割OCR文本
       const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-      // 判断是否为标题行（而非正文）
+      // 过滤非标题行
       function isTitleLine(line) {
-        if (line.length < 3 || line.length > 60) return false;
-        // 跳过纯数字或日期
+        if (line.length < 2 || line.length > 80) return false;
         if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) return false;
         if (/^\d+$/.test(line.replace(/\s/g, ''))) return false;
-        // 标题行不应包含句号、逗号等正文标点
-        if (/[。，；、,;.]/.test(line)) return false;
+        // 包含句号、逗号、分号的视为正文
+        if (/[。，；、,;]/.test(line)) return false;
+        // 以"版本号"、"编号"、"合同编号"等开头的是次要信息
+        if (/^(?:版本号|编号|合同编号|协议编号|文号|编号[:：]|版本[:：])/.test(line)) return false;
         return true;
       }
 
-      // 按长度降序排列关键词（优先匹配更长的关键词）
-      const sortedKeywords = [...highPriorityKeywords].sort((a, b) => b.length - a.length);
+      // 从行中提取纯标题：去掉关键词后面的公司名等冗余内容
+      function truncateAfterKeyword(line, keyword) {
+        const idx = line.indexOf(keyword);
+        let title = line.substring(0, idx + keyword.length);
+        // 去掉开头的版本号/编号等信息
+        title = title.replace(/^版本号[:：]?\s*\d+年第\d+版\s*/, '');
+        title = title.replace(/^版本号[:：]?\s*\S+\s*/, '');
+        title = title.replace(/^编号[:：]?\s*\S+\s*/, '');
+        title = title.replace(/^[\d\.\s\u3000\u00A0]+/, '');
+        // 去掉关键词后面紧跟的公司名/机构名
+        title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
+        // 去掉末尾的冒号、日期
+        title = title.replace(/[：:]\s*$/, '');
+        title = title.replace(/\d{4}年\d{1,2}月\d{1,2}日?$/, '');
+        return title.trim();
+      }
 
-      // 从前5行中找包含关键词的标题行
-      for (let i = 0; i < Math.min(lines.length, 5); i++) {
+      // 从前10行中找包含关键词的标题行
+      for (let i = 0; i < Math.min(lines.length, 10); i++) {
         const line = lines[i];
         if (!isTitleLine(line)) continue;
 
-        // 检查是否包含关键词
+        // 查找关键词
         let matchedKeyword = null;
-        let matchIdx = -1;
-        for (const kw of sortedKeywords) {
-          const idx = line.indexOf(kw);
-          if (idx >= 0) {
+        for (const kw of highPriorityKeywords) {
+          if (line.includes(kw)) {
             matchedKeyword = kw;
-            matchIdx = idx;
             break;
           }
         }
 
         if (matchedKeyword) {
-          // 截断到关键词结束位置，去掉关键词后面的内容（如公司名等）
-          let title = line.substring(0, matchIdx + matchedKeyword.length);
-          title = title
-            .replace(/^[\d\.\s\u3000\u00A0]+/, '')
-            .replace(/^[附附]+[表表格格]?[\s:：]+/, '')
-            .trim();
-          // 去掉中文间空格
+          let title = truncateAfterKeyword(line, matchedKeyword);
           title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
           title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-          if (title.length > 3) {
+          if (title.length >= 2 && title.length <= 60) {
             return title;
           }
-          return line.substring(0, matchIdx + matchedKeyword.length);
+          return line.substring(0, line.indexOf(matchedKeyword) + matchedKeyword.length);
         }
       }
 
-      // 没有关键词匹配，找第一个标题行
+      // 回退：取第一个有效标题行
       for (const line of lines) {
         if (!isTitleLine(line)) continue;
         return line;
       }
 
-      // 如果标题行过滤太严格，放宽限制取第一行有效文本
+      // 最终回退
       for (const line of lines) {
-        if (line.length < 3 || line.length > 100) continue;
-        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) continue;
-        if (/^\d+$/.test(line.replace(/\s/g, ''))) continue;
-        return line;
+        if (line.length > 2 && line.length < 60) return line;
       }
 
       return '';
