@@ -3594,8 +3594,9 @@
 
       // 标题关键词（按长度降序，优先匹配长词）
       const rawKeywords = [
-        '授权委托书', '承诺书和风险提示书', '承诺书和风险揭示书',
-        '接入外部信息系统', '业务确认书', '交易确认书',
+        '承诺书和风险提示书', '承诺书和风险揭示书',
+        '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
+        '授权委托书', '业务确认书', '交易确认书',
         '开户合同', '开户协议', '开户申请书', '交易申请书', '交易协议',
         '托管协议', '托管合同', '顾问协议', '顾问合同', '合伙协议',
         '委托协议', '委托合同', '服务协议', '服务合同',
@@ -3621,76 +3622,67 @@
         '决议', '纪要', '公告', '通报'
       ];
       // 去重并按长度降序
-      const highPriorityKeywords = [...new Set(rawKeywords)].sort((a, b) => b.length - a.length);
+      const keywords = [...new Set(rawKeywords)].sort((a, b) => b.length - a.length);
 
       // 按行分割OCR文本
       const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-      // 过滤非标题行
-      function isTitleLine(line) {
-        if (line.length < 2 || line.length > 80) return false;
-        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) return false;
-        if (/^\d+$/.test(line.replace(/\s/g, ''))) return false;
-        // 包含句号、逗号、分号的视为正文
-        if (/[。，；、,;]/.test(line)) return false;
-        // 以"版本号"、"编号"、"合同编号"等开头的是次要信息
-        if (/^(?:版本号|编号|合同编号|协议编号|文号|编号[:：]|版本[:：])/.test(line)) return false;
-        return true;
-      }
+      // 仅在最前8行中找标题（标题一定在页面顶部）
+      const searchRange = Math.min(lines.length, 8);
 
-      // 从行中提取纯标题：去掉关键词后面的公司名等冗余内容
-      function truncateAfterKeyword(line, keyword) {
-        const idx = line.indexOf(keyword);
-        let title = line.substring(0, idx + keyword.length);
-        // 去掉开头的版本号/编号等信息
-        title = title.replace(/^版本号[:：]?\s*\d+年第\d+版\s*/, '');
-        title = title.replace(/^版本号[:：]?\s*\S+\s*/, '');
-        title = title.replace(/^编号[:：]?\s*\S+\s*/, '');
-        title = title.replace(/^[\d\.\s\u3000\u00A0]+/, '');
-        // 去掉关键词后面紧跟的公司名/机构名
-        title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
-        // 去掉末尾的冒号、日期
-        title = title.replace(/[：:]\s*$/, '');
-        title = title.replace(/\d{4}年\d{1,2}月\d{1,2}日?$/, '');
-        return title.trim();
-      }
-
-      // 从前10行中找包含关键词的标题行
-      for (let i = 0; i < Math.min(lines.length, 10); i++) {
+      // 遍历前8行，用长关键词优先匹配
+      for (let i = 0; i < searchRange; i++) {
         const line = lines[i];
-        if (!isTitleLine(line)) continue;
+        if (line.length < 2 || line.length > 80) continue;
 
-        // 查找关键词
-        let matchedKeyword = null;
-        for (const kw of highPriorityKeywords) {
+        // 跳过版本号/编号行
+        if (/^(?:版本号|编号|合同编号|协议编号|文号|编号[:：])/.test(line)) continue;
+        // 跳过纯日期行
+        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) continue;
+        if (/^\d+$/.test(line.replace(/\s/g, ''))) continue;
+        // 跳过含大量正文标点的行
+        if (line.length > 5 && /[。，；]/.test(line)) continue;
+
+        // 从长关键词开始匹配
+        for (const kw of keywords) {
           if (line.includes(kw)) {
-            matchedKeyword = kw;
-            break;
+            // 提取：关键词之前的内容（通常没有）+ 关键词
+            let title = line.substring(0, line.indexOf(kw) + kw.length);
+            // 清理
+            title = title.replace(/^版本号[:：]?\s*\S+\s*/, '');
+            title = title.replace(/^编号[:：]?\s*\S+\s*/, '');
+            title = title.replace(/^[\d\.\s\u3000\u00A0]+/, '');
+            title = title.replace(/[：:]\s*$/, '');
+            // 去掉关键词后面的公司名
+            title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
+            // 去掉中文间空格
+            title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+            title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+            if (title.length >= 2) {
+              return title.trim();
+            }
           }
         }
+      }
 
-        if (matchedKeyword) {
-          let title = truncateAfterKeyword(line, matchedKeyword);
-          title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-          title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-          if (title.length >= 2 && title.length <= 60) {
-            return title;
-          }
-          return line.substring(0, line.indexOf(matchedKeyword) + matchedKeyword.length);
+      // 回退：从前8行取最长的有效行作为标题
+      let bestLine = '';
+      for (let i = 0; i < searchRange; i++) {
+        const line = lines[i];
+        if (line.length < 2 || line.length > 60) continue;
+        if (/^(?:版本号|编号|合同编号|协议编号|文号)/.test(line)) continue;
+        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line)) continue;
+        if (/[。，；]/.test(line) && line.length > 20) continue;
+        if (line.length > bestLine.length) {
+          bestLine = line;
         }
       }
+      if (bestLine) return bestLine;
 
-      // 回退：取第一个有效标题行
+      // 最终回退：第一行
       for (const line of lines) {
-        if (!isTitleLine(line)) continue;
-        return line;
+        if (line.length > 2 && line.length < 80) return line;
       }
-
-      // 最终回退
-      for (const line of lines) {
-        if (line.length > 2 && line.length < 60) return line;
-      }
-
       return '';
     }
 
