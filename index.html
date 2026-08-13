@@ -3486,13 +3486,17 @@
               const maxPages = Math.min(pdf.numPages, 3);
               for (let i = 1; i <= maxPages; i++) {
                 const page = await pdf.getPage(i);
+                const viewport = page.getViewport({ scale: 1 });
+                const pageHeight = viewport.height; // PDF页面高度，用于Y坐标转换
                 const content = await page.getTextContent();
                 
                 content.items.forEach(item => {
                   if (item.str && item.str.trim()) {
                     const fontSize = item.fontSize || 12;
                     const x = item.transform[4] || 0;
-                    const y = item.transform[5] || 0;
+                    const rawY = item.transform[5] || 0;
+                    // PDF.js Y坐标原点在页面底部，转换为顶部原点（Y值越小越靠上）
+                    const y = pageHeight - rawY;
                     textBlocks.push({
                       text: item.str.trim(),
                       fontSize,
@@ -3595,22 +3599,26 @@
         }
         // 然后尝试从文本块中找标题（优先选择页面顶部的文本）
         else if (textBlocks.length > 0) {
-          // 按Y坐标降序排序（Y越大越靠上）
-          const sortedByY = [...textBlocks].sort((a, b) => b.y - a.y);
+          // 按Y坐标升序排序（Y越小越靠上，PDF.js坐标已转换）
+          const sortedByY = [...textBlocks].sort((a, b) => a.y - b.y);
           addDebugInfo('🔍 按位置排序（顶部优先）', sortedByY.slice(0, 8).map(b => `Y=${Math.round(b.y)} ${b.fontSize}px: ${b.text}`).join('\n'));
           
-          // 计算页面顶部区域（前40%的文本块）
-          const topThreshold = sortedByY[0]?.y ? sortedByY[0].y * 0.6 : 300;
-          const topAreaBlocks = sortedByY.filter(b => b.y > topThreshold);
-          addDebugInfo('📍 顶部区域文本块', `${topAreaBlocks.length} 个，阈值: ${Math.round(topThreshold)}`);
+          // 计算页面顶部区域（前40%的页面高度范围）
+          const maxY = sortedByY.length > 0 ? Math.max(...sortedByY.map(b => b.y)) : 800;
+          const topThreshold = maxY * 0.4; // 顶部40%的区域
+          const topAreaBlocks = sortedByY.filter(b => b.y <= topThreshold);
+          addDebugInfo('📍 顶部区域文本块', `${topAreaBlocks.length} 个，页面最大Y: ${Math.round(maxY)}，顶部阈值: ${Math.round(topThreshold)}`);
+          
+          // 如果顶部区域文本块太少，放宽到50%
+          const finalTopBlocks = topAreaBlocks.length >= 3 ? topAreaBlocks : sortedByY.filter(b => b.y <= maxY * 0.5);
           
           // 尝试合并顶部区域的相邻文本块（防止标题被分割）
           let mergedBlocks = [];
-          if (topAreaBlocks.length > 0) {
-            let currentMerge = { text: topAreaBlocks[0].text, fontSize: topAreaBlocks[0].fontSize, y: topAreaBlocks[0].y };
-            for (let i = 1; i < topAreaBlocks.length; i++) {
-              const prev = topAreaBlocks[i - 1];
-              const curr = topAreaBlocks[i];
+          if (finalTopBlocks.length > 0) {
+            let currentMerge = { text: finalTopBlocks[0].text, fontSize: finalTopBlocks[0].fontSize, y: finalTopBlocks[0].y };
+            for (let i = 1; i < finalTopBlocks.length; i++) {
+              const prev = finalTopBlocks[i - 1];
+              const curr = finalTopBlocks[i];
               // 如果位置相近（Y差小于30），合并
               if (Math.abs(prev.y - curr.y) < 30 && Math.abs(prev.fontSize - curr.fontSize) < 3) {
                 currentMerge.text += curr.text;
@@ -3623,15 +3631,43 @@
             addDebugInfo('🔗 合并后的文本块', mergedBlocks.slice(0, 5).map(b => `${b.fontSize}px: ${b.text}`).join('\n'));
           }
           
-          // 标题关键词（优先级从高到低）
-          const highPriorityKeywords = ['申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '协议', '合同', '承诺书'];
-          const mediumPriorityKeywords = ['申请', '表', '系统', '通知书', '告知书', '确认书', '声明书', '证明', '证书'];
-          const lowPriorityKeywords = ['考试', '合格', '成绩', '报告', '通知', '决定', '批复'];
+          // 标题关键词（优先级从高到低）- 完整扩展列表
+          const highPriorityKeywords = [
+            '申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '调查表', '汇总表',
+            '协议', '合同', '契约', '协议书',
+            '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
+            '提示书', '揭示书', '风险揭示书', '风险提示书', '合规意见书', '法律意见书',
+            '尽职调查报告', '财务报告', '审计报告', '评估报告', '咨询报告', '情况报告',
+            '情况说明', '工作说明', '补充说明', '澄清说明', '使用说明', '操作说明',
+            '系统说明', '产品说明', '业务说明', '交易说明', '结算说明', '资金说明',
+            '清算说明', '整改说明', '说明报告', '说明函',
+            '处罚通知', '处理通知', '变更通知', '调整通知', '到期通知', '续约通知',
+            '预警通知', '终止通知', '解除通知', '催收通知', '缴款通知',
+            '公函', '律师函', '通知函', '催收函', '邀请函', '催告函', '回复函',
+            '答复函', '复函', '工作函', '联系函', '商洽函', '询问函',
+            '告知函', '提示函', '警示函', '监管函', '函件', '函',
+            '委托书', '授权书', '任命书', '离职证明', '解约函',
+            '收入证明', '在职证明', '资格证明', '身份证明', '资质证明', '证明',
+            '保密承诺书', '合规承诺书', '交易承诺书', '风险承诺书',
+            '投资协议书', '服务协议书', '合作协议书', '托管协议书',
+            '情况反映', '情况汇报', '情况通报',
+            '意向书', '谅解备忘录', '合作备忘录', '备忘录', '要约',
+            '决议', '纪要', '公告', '通报'
+          ];
+          const mediumPriorityKeywords = [
+            '申请', '表', '系统', '通知书', '告知书', '确认书', '声明书', '证明', '证书',
+            '说明', '通知', '报告', '函', '协议', '合同', '承诺', '意见',
+            '方案', '计划', '细则', '规则', '规程', '规范', '标准', '流程'
+          ];
+          const lowPriorityKeywords = [
+            '考试', '合格', '成绩', '报告', '通知', '决定', '批复',
+            '规定', '办法', '措施', '要求', '须知', '指南', '简介', '概况'
+          ];
           
           // 在合并后的块和原始块中都寻找
           const allCandidateBlocks = [...new Map([
             ...mergedBlocks.map(b => [b.text, b]),
-            ...topAreaBlocks.map(b => [b.text, b])
+            ...finalTopBlocks.map(b => [b.text, b])
           ]).values()];
           
           // 1. 优先找包含高优先级关键词的
@@ -3673,7 +3709,7 @@
           
           // 3. 在顶部区域中按字体大小排序，找字体最大且长度合适的
           if (!extractedTitle) {
-            const topSortedByFont = [...topAreaBlocks].sort((a, b) => b.fontSize - a.fontSize);
+            const topSortedByFont = [...finalTopBlocks].sort((a, b) => b.fontSize - a.fontSize);
             addDebugInfo('🔤 顶部区域按字体大小排序', topSortedByFont.slice(0, 3).map(b => `${b.fontSize}px: ${b.text}`).join('\n'));
             
             for (const block of topSortedByFont) {
@@ -3681,8 +3717,10 @@
                 // 检查是否包含常见标题关键词
                 const hasKeyword = lowPriorityKeywords.some(kw => block.text.includes(kw));
                 const isNotDate = !/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && !/^\d{8}$/.test(block.text);
+                // Y越小越靠上，block.y <= maxY*0.5 表示在页面上半部分
+                const isInUpperArea = block.y <= maxY * 0.5;
                 
-                if ((hasKeyword || block.fontSize >= 14 || block.y > topThreshold + 50) && isNotDate) {
+                if ((hasKeyword || block.fontSize >= 14 || isInUpperArea) && isNotDate) {
                   let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
                   if (cleanText.length > 3) {
                     extractedTitle = cleanText;
