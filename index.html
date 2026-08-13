@@ -3658,7 +3658,19 @@
 
         for (const kw of keywords) {
           if (stripped.includes(kw)) {
-            let title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+            // 关键词前面的内容（可能有logo文字、公司名等干扰）
+            let beforeKw = stripped.substring(0, stripped.indexOf(kw));
+            // 关键词本身
+            let title = kw;
+
+            // 判断关键词前面是否有"正文"（包含括号、标点等），如果有才保留
+            // 否则认为是logo/公司名/版本号，直接丢弃
+            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw)) {
+              // 前面有正文内容，保留
+              title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+            }
+            // else: 直接用关键词本身，去掉前面的logo文字
+
             title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
             title = title.replace(/[：:]\s*$/, '');
             title = title.replace(/\d{4}年\d{1,2}月\d{1,2}日?$/, '');
@@ -3668,7 +3680,6 @@
               addDebugInfo('✅ 单行业务匹配', `行${i+1} → kw=${kw} → ${title}`);
               return title.trim();
             }
-            addDebugInfo('✅ 单行兜底匹配', kw);
             return kw;
           }
         }
@@ -3680,9 +3691,14 @@
         if (combined.length < 4 || combined.length > 120) continue;
 
         for (const kw of keywords) {
-          if (kw.length < 5) continue; // 只匹配较长关键词
+          if (kw.length < 5) continue;
           if (combined.includes(kw)) {
-            let title = combined.substring(0, combined.indexOf(kw) + kw.length);
+            let beforeKw = combined.substring(0, combined.indexOf(kw));
+            let title = kw;
+            // 如果前面有正文内容（括号/日期），保留
+            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw)) {
+              title = combined.substring(0, combined.indexOf(kw) + kw.length);
+            }
             title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
             title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
             title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
