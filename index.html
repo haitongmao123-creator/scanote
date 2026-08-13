@@ -3764,6 +3764,24 @@
       return '';
     }
 
+    // 从OCR文本中提取备案编码（格式：6位字母+数字，如SVD248）
+    function extractFilingCode(text) {
+      if (!text) return '';
+      // 匹配"备案编码"后面的6位字母数字组合
+      const patterns = [
+        /备案编码[:：]?\s*([A-Za-z0-9]{6})/,
+        /备案编号[:：]?\s*([A-Za-z0-9]{6})/,
+        /备案代码[:：]?\s*([A-Za-z0-9]{6})/,
+      ];
+      for (const p of patterns) {
+        const m = text.match(p);
+        if (m && m[1]) {
+          return m[1].toUpperCase();
+        }
+      }
+      return '';
+    }
+
     // PDF Text Extraction (Local Mode) - Improved!
     async function extractTextFromPDF(file) {
       try {
@@ -4044,6 +4062,14 @@
               }
             }
           }
+        }
+
+        // 提取备案编码并追加到标题（适用于文本型和扫描型PDF）
+        const textForCode = text || ocrText || '';
+        const filingCode = extractFilingCode(textForCode);
+        if (filingCode) {
+          extractedTitle = (extractedTitle || '') + filingCode;
+          addDebugInfo('📋 备案编码', filingCode);
         }
 
         // OCR文本标题提取（扫描型PDF）
