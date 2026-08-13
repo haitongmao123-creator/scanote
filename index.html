@@ -3469,66 +3469,70 @@
     });
 
     // Extract raw text from PDF (with font size info)
-    async function extractRawTextFromPDF(file, includeFontInfo = false) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-          try {
-            const typedarray = new Uint8Array(e.target.result);
-            const pdf = await pdfjsLib.getDocument(typedarray).promise;
+    async function extractRawTextFromPDF(typedarray, includeFontInfo = false) {
+      try {
+        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+        
+        if (includeFontInfo) {
+          // Return text with font size info for better title detection
+          const textBlocks = [];
+          const maxPages = Math.min(pdf.numPages, 3);
+          for (let i = 1; i <= maxPages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 1 });
+            const pageHeight = viewport.height; // PDF页面高度，用于Y坐标转换
+            const content = await page.getTextContent();
             
-            if (includeFontInfo) {
-              // Return text with font size info for better title detection
-              const textBlocks = [];
-              const maxPages = Math.min(pdf.numPages, 3);
-              for (let i = 1; i <= maxPages; i++) {
-                const page = await pdf.getPage(i);
-                const viewport = page.getViewport({ scale: 1 });
-                const pageHeight = viewport.height; // PDF页面高度，用于Y坐标转换
-                const content = await page.getTextContent();
-                
-                content.items.forEach(item => {
-                  if (item.str && item.str.trim()) {
-                    const fontSize = item.fontSize || 12;
-                    const x = item.transform[4] || 0;
-                    const rawY = item.transform[5] || 0;
-                    // PDF.js Y坐标原点在页面底部，转换为顶部原点（Y值越小越靠上）
-                    const y = pageHeight - rawY;
-                    textBlocks.push({
-                      text: item.str.trim(),
-                      fontSize,
-                      x,
-                      y
-                    });
-                  }
+            content.items.forEach(item => {
+              if (item.str && item.str.trim()) {
+                const fontSize = item.fontSize || 12;
+                const x = item.transform[4] || 0;
+                const rawY = item.transform[5] || 0;
+                // PDF.js Y坐标原点在页面底部，转换为顶部原点（Y值越小越靠上）
+                const y = pageHeight - rawY;
+                textBlocks.push({
+                  text: item.str.trim(),
+                  fontSize,
+                  x,
+                  y
                 });
               }
-              resolve({ textBlocks });
-            } else {
-              // Return plain text
-              let text = '';
-              const maxPages = Math.min(pdf.numPages, 3);
-              for (let i = 1; i <= maxPages; i++) {
-                const page = await pdf.getPage(i);
-                const content = await page.getTextContent();
-                const pageText = content.items.map(item => item.str).join(' ');
-                text += pageText + '\n';
-              }
-              resolve(text);
-            }
-          } catch (err) {
-            reject(err);
+            });
           }
-        };
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(file);
-      });
+          return { textBlocks };
+        } else {
+          // Return plain text lines (按行排列)
+          const lines = [];
+          const maxPages = Math.min(pdf.numPages, 2);
+          for (let i = 1; i <= maxPages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 1 });
+            const pageHeight = viewport.height;
+            const content = await page.getTextContent();
+            const lineBlocks = [];
+            content.items.forEach(item => {
+              if (item.str && item.str.trim()) {
+                const rawY = item.transform[5] || 0;
+                const y = pageHeight - rawY;
+                lineBlocks.push({ text: item.str.trim(), y });
+              }
+            });
+            // 按Y升序（越靠上越先）
+            lineBlocks.sort((a, b) => a.y - b.y);
+            for (const b of lineBlocks) {
+              lines.push(b.text);
+            }
+          }
+          return lines.join('\n');
+        }
+      } catch (err) {
+        throw err;
+      }
     }
 
     // OCR识别（扫描型PDF）- 仅识别上半部分提升速度
-    async function performOCR(file) {
+    async function performOCR(typedarray) {
       try {
-        const typedarray = new Uint8Array(await file.arrayBuffer());
         const pdf = await pdfjsLib.getDocument(typedarray).promise;
         const page = await pdf.getPage(1);
 
@@ -3672,39 +3676,13 @@
         return true;
       }
 
-      // === 1. 前15行，关键词匹配（优先长关键词）===
-      for (let i = 0; i < searchRange; i++) {
-        let stripped = stripLine(lines[i]);
-        if (stripped.length < 2 || stripped.length > 80) continue;
-
-        for (const kw of keywords) {
-          if (stripped.includes(kw)) {
-            // 关键词前面的内容
-            let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-            let title = kw;
-
-            // 如果关键词前面有正文内容（括号/日期/较长文本），保留
-            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw) || beforeKw.length > 10) {
-              title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
-            }
-
-            title = cleanTitle(title);
-
-            if (isValidTitle(title)) {
-              addDebugInfo('✅ 单行业务匹配', `行${i+1} → kw=${kw} → ${title}`);
-              return title;
-            }
-          }
-        }
-      }
-
-      // === 2. 跨两行合并匹配 ===
+      // === 1. 前15行，先尝试跨行合并匹配（更长关键词更精准，优先）===
       for (let i = 0; i < searchRange - 1; i++) {
         let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
         if (combined.length < 4 || combined.length > 120) continue;
 
         for (const kw of keywords) {
-          if (kw.length < 5) continue;
+          if (kw.length < 6) continue; // 跨行只匹配较长关键词（>=6字）
           if (combined.includes(kw)) {
             let beforeKw = combined.substring(0, combined.indexOf(kw));
             let title = kw;
@@ -3713,7 +3691,28 @@
             }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
-              addDebugInfo('✅ 跨行匹配', `行${i+1}+${i+2} → kw=${kw} → ${title}`);
+              addDebugInfo('✅ 跨行匹配(优先)', `行${i+1}+${i+2} → kw=${kw} → ${title}`);
+              return title;
+            }
+          }
+        }
+      }
+
+      // === 2. 单行匹配 ===
+      for (let i = 0; i < searchRange; i++) {
+        let stripped = stripLine(lines[i]);
+        if (stripped.length < 2 || stripped.length > 80) continue;
+
+        for (const kw of keywords) {
+          if (stripped.includes(kw)) {
+            let beforeKw = stripped.substring(0, stripped.indexOf(kw));
+            let title = kw;
+            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw) || beforeKw.length > 10) {
+              title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+            }
+            title = cleanTitle(title);
+            if (isValidTitle(title)) {
+              addDebugInfo('✅ 单行匹配', `行${i+1} → kw=${kw} → ${title}`);
               return title;
             }
           }
@@ -3798,300 +3797,104 @@
         // Word文档特殊处理
         if (isWord) {
           addDebugInfo('📝 Word文档', '本地模式无法直接提取Word内容，尝试使用文件名');
-          // 尝试从文件名中提取有意义的标题
           let title = filenameWithoutExt
             .replace(/[\s_\-]+/g, ' ')
             .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, '')
             .trim();
-          
-          // 如果文件名太长，截取前部分
-          if (title.length > 40) {
-            title = title.slice(0, 40);
-          }
-          
+          if (title.length > 40) title = title.slice(0, 40);
           addDebugInfo('✅ 使用文件名作为标题', title);
           return truncateChinese(title, 20) || '未命名';
         }
 
-        // 2. 尝试提取PDF文本（带字体大小信息）
-        let text = '';
-        let textBlocks = [];
+        // === 关键修复：一次性读取ArrayBuffer，防止浏览器GC导致"file could not be read" ===
+        const arrayBuffer = await file.arrayBuffer();
+        const typedarray = new Uint8Array(arrayBuffer.slice(0));
+
+        // 2. 提取PDF文本层（只取第一页，按行排列）
+        let pdfTextLines = '';
+        let textBlocksCount = 0;
         try {
-          const result = await extractRawTextFromPDF(file, true);
-          if (result.textBlocks) {
-            textBlocks = result.textBlocks;
-            text = textBlocks.map(b => b.text).join(' ');
+          const result = await extractRawTextFromPDF(typedarray, true);
+          if (result.textBlocks && result.textBlocks.length > 0) {
+            textBlocksCount = result.textBlocks.length;
+            // 把文本块按Y升序排列（越靠上越先），每行换行输出
+            const blocks = result.textBlocks
+              .sort((a, b) => a.y - b.y);
+            // 合并同一行的文本块（Y值差距<3视为同一行）
+            const mergedLines = [];
+            let curY = -100;
+            let curLine = '';
+            for (const b of blocks) {
+              if (Math.abs(b.y - curY) < 3) {
+                curLine += b.text;
+              } else {
+                if (curLine) mergedLines.push(curLine);
+                curY = b.y;
+                curLine = b.text;
+              }
+            }
+            if (curLine) mergedLines.push(curLine);
+            pdfTextLines = mergedLines.join('\n');
+            addDebugInfo('📝 文本层按行提取', pdfTextLines.slice(0, 300));
           } else {
-            text = result;
+            addDebugInfo('📝 文本层为空', '扫描型PDF，需OCR');
           }
-          addDebugInfo('📝 提取的文本', (text || '').slice(0, 200));
         } catch (err) {
           addDebugInfo('❌ 文本提取错误', err.message);
         }
 
-        // 2.5 如果文本层为空（扫描型PDF），启动OCR识别
+        // 2.5 文本层为空（扫描型PDF），启动OCR识别
         let ocrText = '';
-        if (textBlocks.length === 0 && (!text || text.trim().length === 0)) {
+        if (textBlocksCount === 0 || !pdfTextLines || pdfTextLines.trim().length === 0) {
           addDebugInfo('🔎 检测到扫描型PDF', '文字层为空，启动本地OCR识别');
           try {
-            ocrText = await performOCR(file);
+            ocrText = await performOCR(typedarray);
             if (ocrText) {
-              addDebugInfo('📝 OCR文本', ocrText.slice(0, 200));
+              addDebugInfo('📝 OCR文本', ocrText.slice(0, 300));
             }
           } catch (ocrErr) {
             addDebugInfo('❌ OCR识别失败', ocrErr.message);
           }
         }
 
-        // 3. 尝试获取PDF元数据
-        let metaTitle = '';
-        try {
-          const typedarray = new Uint8Array(await file.arrayBuffer());
-          const pdf = await pdfjsLib.getDocument(typedarray).promise;
-          const metadata = await pdf.getMetadata();
-          if (metadata.info?.Title) {
-            metaTitle = metadata.info.Title;
-            addDebugInfo('📋 元数据标题', metaTitle);
-          }
-        } catch (err) {
-          addDebugInfo('⚠️ 元数据读取', '无法读取: ' + err.message);
-        }
-
-        // 4. 分析文本，尝试找出标题（优先选择页面顶部的文本）
+        // === 3. 统一走成熟的extractTitleFromOCRText处理标题 ===
+        // 优先级：文本层（更准，更快） >  OCR层
+        const rawTextForExtract = pdfTextLines || ocrText;
         let extractedTitle = '';
-        
-        // 首先尝试元数据标题
-        if (metaTitle && metaTitle.length > 2) {
-          extractedTitle = metaTitle;
-          addDebugInfo('✅ 使用元数据标题', extractedTitle);
+        if (rawTextForExtract) {
+          extractedTitle = extractTitleFromOCRText(rawTextForExtract);
+          addDebugInfo('🏷️ 关键词提取标题', extractedTitle || '未匹配到关键词');
         }
-        // 然后尝试从文本块中找标题（优先选择页面顶部的文本）
-        else if (textBlocks.length > 0) {
-          // 按Y坐标升序排序（Y越小越靠上，PDF.js坐标已转换）
-          const sortedByY = [...textBlocks].sort((a, b) => a.y - b.y);
-          addDebugInfo('🔍 按位置排序（顶部优先）', sortedByY.slice(0, 8).map(b => `Y=${Math.round(b.y)} ${b.fontSize}px: ${b.text}`).join('\n'));
-          
-          // 计算页面顶部区域（前40%的页面高度范围）
-          const maxY = sortedByY.length > 0 ? Math.max(...sortedByY.map(b => b.y)) : 800;
-          const topThreshold = maxY * 0.4; // 顶部40%的区域
-          const topAreaBlocks = sortedByY.filter(b => b.y <= topThreshold);
-          addDebugInfo('📍 顶部区域文本块', `${topAreaBlocks.length} 个，页面最大Y: ${Math.round(maxY)}，顶部阈值: ${Math.round(topThreshold)}`);
-          
-          // 如果顶部区域文本块太少，放宽到50%
-          const finalTopBlocks = topAreaBlocks.length >= 3 ? topAreaBlocks : sortedByY.filter(b => b.y <= maxY * 0.5);
-          
-          // 尝试合并顶部区域的相邻文本块（防止标题被分割）
-          let mergedBlocks = [];
-          if (finalTopBlocks.length > 0) {
-            let currentMerge = { text: finalTopBlocks[0].text, fontSize: finalTopBlocks[0].fontSize, y: finalTopBlocks[0].y };
-            for (let i = 1; i < finalTopBlocks.length; i++) {
-              const prev = finalTopBlocks[i - 1];
-              const curr = finalTopBlocks[i];
-              // 如果位置相近（Y差小于30），合并
-              if (Math.abs(prev.y - curr.y) < 30 && Math.abs(prev.fontSize - curr.fontSize) < 3) {
-                currentMerge.text += curr.text;
-              } else {
-                mergedBlocks.push(currentMerge);
-                currentMerge = { text: curr.text, fontSize: curr.fontSize, y: curr.y };
-              }
-            }
-            mergedBlocks.push(currentMerge);
-            addDebugInfo('🔗 合并后的文本块', mergedBlocks.slice(0, 5).map(b => `${b.fontSize}px: ${b.text}`).join('\n'));
-          }
-          
-          // 标题关键词（优先级从高到低）- 完整扩展列表
-          const highPriorityKeywords = [
-            '申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '调查表', '汇总表',
-            '协议', '合同', '契约', '协议书',
-            '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
-            '提示书', '揭示书', '风险揭示书', '风险提示书', '合规意见书', '法律意见书',
-            '尽职调查报告', '财务报告', '审计报告', '评估报告', '咨询报告', '情况报告',
-            '情况说明', '工作说明', '补充说明', '澄清说明', '使用说明', '操作说明',
-            '系统说明', '产品说明', '业务说明', '交易说明', '结算说明', '资金说明',
-            '清算说明', '整改说明', '说明报告', '说明函',
-            '处罚通知', '处理通知', '变更通知', '调整通知', '到期通知', '续约通知',
-            '预警通知', '终止通知', '解除通知', '催收通知', '缴款通知',
-            '公函', '律师函', '通知函', '催收函', '邀请函', '催告函', '回复函',
-            '答复函', '复函', '工作函', '联系函', '商洽函', '询问函',
-            '告知函', '提示函', '警示函', '监管函', '函件', '函',
-            '委托书', '授权书', '任命书', '离职证明', '解约函',
-            '收入证明', '在职证明', '资格证明', '身份证明', '资质证明', '证明',
-            '保密承诺书', '合规承诺书', '交易承诺书', '风险承诺书',
-            '投资协议书', '服务协议书', '合作协议书', '托管协议书',
-            '情况反映', '情况汇报', '情况通报',
-            '意向书', '谅解备忘录', '合作备忘录', '备忘录', '要约',
-            '决议', '纪要', '公告', '通报'
-          ];
-          const mediumPriorityKeywords = [
-            '申请', '表', '系统', '通知书', '告知书', '确认书', '声明书', '证明', '证书',
-            '说明', '通知', '报告', '函', '协议', '合同', '承诺', '意见',
-            '方案', '计划', '细则', '规则', '规程', '规范', '标准', '流程'
-          ];
-          const lowPriorityKeywords = [
-            '考试', '合格', '成绩', '报告', '通知', '决定', '批复',
-            '规定', '办法', '措施', '要求', '须知', '指南', '简介', '概况'
-          ];
-          
-          // 在合并后的块和原始块中都寻找
-          const allCandidateBlocks = [...new Map([
-            ...mergedBlocks.map(b => [b.text, b]),
-            ...finalTopBlocks.map(b => [b.text, b])
-          ]).values()];
-          
-          // 1. 优先找包含高优先级关键词的
-          for (const block of allCandidateBlocks) {
-            if (block.text.length > 5 && block.text.length < 150) {
-              const hasHighKeyword = highPriorityKeywords.some(kw => block.text.includes(kw));
-              if (hasHighKeyword) {
-                // 清理前缀（如"附表："、"1. "等）
-                let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
-                if (cleanText.length > 3) {
-                  extractedTitle = cleanText;
-                } else {
-                  extractedTitle = block.text;
-                }
-                addDebugInfo('✅ 高优先级关键词标题', `${block.fontSize}px Y=${Math.round(block.y)}: ${extractedTitle}`);
-                break;
-              }
-            }
-          }
-          
-          // 2. 找包含中优先级关键词的
-          if (!extractedTitle) {
-            for (const block of allCandidateBlocks) {
-              if (block.text.length > 5 && block.text.length < 150) {
-                const hasMediumKeyword = mediumPriorityKeywords.some(kw => block.text.includes(kw));
-                if (hasMediumKeyword) {
-                  let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
-                  if (cleanText.length > 3) {
-                    extractedTitle = cleanText;
-                  } else {
-                    extractedTitle = block.text;
-                  }
-                  addDebugInfo('✅ 中优先级关键词标题', `${block.fontSize}px Y=${Math.round(block.y)}: ${extractedTitle}`);
-                  break;
-                }
-              }
-            }
-          }
-          
-          // 3. 在顶部区域中按字体大小排序，找字体最大且长度合适的
-          if (!extractedTitle) {
-            const topSortedByFont = [...finalTopBlocks].sort((a, b) => b.fontSize - a.fontSize);
-            addDebugInfo('🔤 顶部区域按字体大小排序', topSortedByFont.slice(0, 3).map(b => `${b.fontSize}px: ${b.text}`).join('\n'));
-            
-            for (const block of topSortedByFont) {
-              if (block.text.length > 3 && block.text.length < 100) {
-                // 检查是否包含常见标题关键词
-                const hasKeyword = lowPriorityKeywords.some(kw => block.text.includes(kw));
-                const isNotDate = !/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && !/^\d{8}$/.test(block.text);
-                // Y越小越靠上，block.y <= maxY*0.5 表示在页面上半部分
-                const isInUpperArea = block.y <= maxY * 0.5;
-                
-                if ((hasKeyword || block.fontSize >= 14 || isInUpperArea) && isNotDate) {
-                  let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
-                  if (cleanText.length > 3) {
-                    extractedTitle = cleanText;
-                  } else {
-                    extractedTitle = block.text;
-                  }
-                  addDebugInfo('✅ 使用顶部大字体标题', `${block.fontSize}px Y=${Math.round(block.y)}: ${extractedTitle}`);
-                  break;
-                }
-              }
-            }
-          }
-          
-          // 4. 如果没找到，找页面最顶部的文本（不限制字体大小）
-          if (!extractedTitle) {
-            for (const block of sortedByY.slice(0, 20)) {
-              if (block.text.length > 3 && block.text.length < 100) {
-                const isNotDate = !/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && !/^\d{8}$/.test(block.text);
-                const isNotNumber = !/^\d+$/.test(block.text.replace(/\s/g, ''));
-                
-                if (isNotDate && isNotNumber) {
-                  let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
-                  if (cleanText.length > 3) {
-                    extractedTitle = cleanText;
-                  } else {
-                    extractedTitle = block.text;
-                  }
-                  addDebugInfo('✅ 使用页面最顶部文本', `Y=${Math.round(block.y)}: ${extractedTitle}`);
-                  break;
-                }
-              }
-            }
-          }
-          
-          // 5. 如果还是没找到，尝试字体最大的
-          if (!extractedTitle) {
-            const sortedByFont = [...textBlocks].sort((a, b) => b.fontSize - a.fontSize);
-            for (const block of sortedByFont) {
-              if (block.text.length > 3 && block.text.length < 100) {
-                const isNotDate = !/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(block.text) && !/^\d{8}$/.test(block.text);
-                const isNotNumber = !/^\d+$/.test(block.text.replace(/\s/g, ''));
-                
-                if (isNotDate && isNotNumber) {
-                  let cleanText = block.text.replace(/^[\d\.\s\u3000\u00A0]+/, '').replace(/^[附附]+[表表格格]?[\s:：]+/, '');
-                  if (cleanText.length > 3) {
-                    extractedTitle = cleanText;
-                  } else {
-                    extractedTitle = block.text;
-                  }
-                  addDebugInfo('✅ 使用字体最大的文本', `${block.fontSize}px: ${extractedTitle}`);
-                  break;
-                }
-              }
-            }
-          }
-        }
-        // 最后尝试普通文本
-        else if (text && text.trim().length > 0) {
-          const lines = text.split('\n').filter(l => l.trim().length > 2);
-          addDebugInfo('🔍 找到的文本行', lines.slice(0, 5).join('\n'));
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.length > 3 && trimmed.length < 100) {
-              // 跳过纯数字或日期
-              if (!/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(trimmed) &&
-                  !/^\d{8}$/.test(trimmed)) {
-                extractedTitle = trimmed;
-                addDebugInfo('✅ 使用文本标题', extractedTitle);
-                break;
+        // 4. 尝试获取PDF元数据（仅当前面完全失败时兜底）
+        if (!extractedTitle) {
+          try {
+            const pdf = await pdfjsLib.getDocument(typedarray.slice(0)).promise;
+            const metadata = await pdf.getMetadata();
+            if (metadata.info?.Title) {
+              const mt = metadata.info.Title.trim();
+              if (mt.length > 2 && mt.length < 60) {
+                extractedTitle = mt;
+                addDebugInfo('✅ 元数据兜底标题', extractedTitle);
               }
             }
+          } catch (err) {
+            addDebugInfo('⚠️ 元数据读取跳过', err.message);
           }
         }
 
-        // OCR文本标题提取（扫描型PDF）
-        if (!extractedTitle && ocrText) {
-          addDebugInfo('🔍 OCR文本行(清理后)', ocrText.slice(0, 300));
-          const ocrTitle = extractTitleFromOCRText(ocrText);
-          if (ocrTitle) {
-            extractedTitle = ocrTitle;
-            addDebugInfo('✅ OCR顶部文本标题', extractedTitle);
-          }
-          addDebugInfo('🏷️ OCR最终标题', extractedTitle || '未识别');
-        }
-
-        // 5. 如果都没找到，使用文件名
+        // 5. 最终兜底：文件名
         let finalTitle = extractedTitle || filenameWithoutExt;
 
-        // 统一清理标题（不管来自文本层还是OCR）
+        // 统一清理标题（去前缀、去英文、按关键词截断正文尾）
         function universalCleanTitle(t) {
           if (!t) return '';
-          // 去掉前缀：备案编码、备案编号、版本号等
           t = t.replace(/^(?:备案编码|备案编号|版本号|合同编号|协议编号|营业执照号码|编号)[:：]?\s*[A-Za-z0-9]{1,20}\s*/, '');
-          // 去掉备案编码行号前缀残留（如："备案编码SVD248..."）
           t = t.replace(/^备案编码[A-Za-z0-9]+/, '');
-          // 去掉英文
           t = t.replace(/[A-Za-z]/g, '');
-          // 去掉6位以上的长数字串
           t = t.replace(/[0-9]{6,}/g, '');
-          // 清理空格
           t = t.replace(/\s+/g, ' ').trim();
-          // 找到关键词位置，截断关键词后面的内容（关键词后面一般是正文/表格字段）
+          // 关键词截断结尾
           const cutKeywords = ['私募投资基金备案证明','备案证明','授权委托书','证券账户业务申请表','基金账户业务申请表','账户业务申请表','接入外部信息系统承诺书和风险提示书','接入外部信息系统承诺书和风险揭示书','承诺书和风险提示书','承诺书和风险揭示书','申请表','申请单','登记表','审批表','审核表','协议书','承诺书','确认书','告知书','通知书','声明书','说明书','风险揭示书','风险提示书','合规意见书','法律意见书','尽职调查报告','审计报告','评估报告','咨询报告','情况报告','情况说明','工作说明','补充说明','澄清说明','使用说明','操作说明','业务说明','交易说明','说明函','律师函','通知函','催收函','邀请函','催告函','回复函','答复函','复函','工作函','联系函','商洽函','询问函','告知函','提示函','警示函','监管函','函件','委托书','授权书','任命书','离职证明','解约函','收入证明','在职证明','资格证明','身份证明','资质证明','证明','保密承诺书','合规承诺书','交易承诺书','风险承诺书','投资协议书','服务协议书','合作协议书','托管协议书','情况反映','情况汇报','情况通报','意向书','谅解备忘录','合作备忘录','备忘录','协议','合同','要约','决议','纪要','公告','通报','处罚通知','处理通知','变更通知','调整通知','到期通知','续约通知','预警通知','终止通知','解除通知','催收通知','缴款通知'];
           cutKeywords.sort((a, b) => b.length - a.length);
           for (const kw of cutKeywords) {
@@ -4110,15 +3913,13 @@
           .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s（）【】\-]/g, ' ')
           .replace(/\s+/g, ' ')
           .trim();
-        // 去掉中文之间的空格
         finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
         finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-        // 去掉中文和数字之间的空格
         finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
         finalTitle = finalTitle.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
 
-        // 最后：追加备案编码（先清理标题再加，防止备案编码被截断）
-        const textForCode = text || ocrText || '';
+        // 最后：追加备案编码
+        const textForCode = pdfTextLines || ocrText || '';
         const filingCode = extractFilingCode(textForCode);
         if (filingCode) {
           finalTitle = finalTitle + filingCode;
@@ -4130,7 +3931,6 @@
         return truncateChinese(finalTitle, 20) || '未命名';
       } catch (err) {
         addDebugInfo('❌ 本地识别失败', err.message);
-        // Fallback to filename
         const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
         addDebugInfo('⚠️ 回退到文件名', filenameWithoutExt);
         return truncateChinese(filenameWithoutExt, 20) || '未命名';
@@ -4156,26 +3956,34 @@
       const isPDF = ext === 'pdf';
       const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
 
-      // Try to extract text first
-      let rawText = '';
+      // 一次性读ArrayBuffer（防止GC）
+      let typedarray = null;
       if (isPDF) {
         try {
-          rawText = await extractRawTextFromPDF(file);
+          typedarray = new Uint8Array((await file.arrayBuffer()).slice(0));
+        } catch {
+          typedarray = null;
+        }
+      }
+
+      // Try to extract text first
+      let rawText = '';
+      if (isPDF && typedarray) {
+        try {
+          rawText = await extractRawTextFromPDF(typedarray.slice(0), false);
         } catch {
           rawText = '';
         }
       } else if (isWord) {
         addDebugInfo('📝 Word文档', '尝试提取文本内容');
-        // Word文档无法直接提取，使用文件名
         rawText = '';
       }
 
       // Convert PDF page to image for vision API
       let imageBase64 = '';
-      if (isPDF) {
+      if (isPDF && typedarray) {
         try {
-          const typedarray = new Uint8Array(await file.arrayBuffer());
-          const pdf = await pdfjsLib.getDocument(typedarray).promise;
+          const pdf = await pdfjsLib.getDocument(typedarray.slice(0)).promise;
           const page = await pdf.getPage(1);
           
           const scale = 2; // Higher scale for better quality
