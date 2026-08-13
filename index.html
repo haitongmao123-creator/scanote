@@ -3140,9 +3140,6 @@
       }
       debugContent.appendChild(debugItem);
       debugContent.scrollTop = debugContent.scrollHeight;
-      // Auto-expand on new debug info
-      $('debug-panel').classList.remove('collapsed');
-      $('debug-toggle').classList.remove('collapsed');
     }
 
     function clearDebugInfo() {
@@ -3535,7 +3532,7 @@
         const pdf = await pdfjsLib.getDocument(typedarray).promise;
         const page = await pdf.getPage(1);
 
-        const scale = 2;
+        const scale = 1.5;
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -3551,7 +3548,6 @@
           logger: m => {
             if (m.status === 'recognizing text') {
               const pct = Math.round(m.progress * 100);
-              // 只在每25%时记录一次，避免刷屏
               const milestone = Math.floor(pct / 25) * 25;
               if (milestone > lastProgress) {
                 lastProgress = milestone;
@@ -3565,12 +3561,11 @@
         await worker.terminate();
 
         let pageText = result.data.text || '';
-        // 清理OCR文本：去掉竖线、多余空行
+        // 清理OCR文本
         pageText = pageText.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
-        // 去掉中文之间的空格（保留英文单词间的空格）
+        // 去掉中文之间的空格
         pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
         pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-        // 去掉中文和数字之间的空格
         pageText = pageText.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
         pageText = pageText.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
 
@@ -3625,15 +3620,30 @@
         return true;
       }
 
+      // 按长度降序排列关键词（优先匹配更长的关键词）
+      const sortedKeywords = [...highPriorityKeywords].sort((a, b) => b.length - a.length);
+
       // 从前5行中找包含关键词的标题行
       for (let i = 0; i < Math.min(lines.length, 5); i++) {
         const line = lines[i];
         if (!isTitleLine(line)) continue;
 
         // 检查是否包含关键词
-        const hasKeyword = highPriorityKeywords.some(kw => line.includes(kw));
-        if (hasKeyword) {
-          let title = line
+        let matchedKeyword = null;
+        let matchIdx = -1;
+        for (const kw of sortedKeywords) {
+          const idx = line.indexOf(kw);
+          if (idx >= 0) {
+            matchedKeyword = kw;
+            matchIdx = idx;
+            break;
+          }
+        }
+
+        if (matchedKeyword) {
+          // 截断到关键词结束位置，去掉关键词后面的内容（如公司名等）
+          let title = line.substring(0, matchIdx + matchedKeyword.length);
+          title = title
             .replace(/^[\d\.\s\u3000\u00A0]+/, '')
             .replace(/^[附附]+[表表格格]?[\s:：]+/, '')
             .trim();
@@ -3643,7 +3653,7 @@
           if (title.length > 3) {
             return title;
           }
-          return line;
+          return line.substring(0, matchIdx + matchedKeyword.length);
         }
       }
 
