@@ -3596,10 +3596,13 @@
       const rawKeywords = [
         '承诺书和风险提示书', '承诺书和风险揭示书',
         '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
+        '证券账户业务申请表', '基金账户业务申请表', '账户业务申请表',
+        '私募投资基金备案证明', '备案证明',
         '业务确认书', '交易确认书',
         '开户合同', '开户协议', '开户申请书', '交易申请书', '交易协议',
         '托管协议', '托管合同', '顾问协议', '顾问合同', '合伙协议',
         '委托协议', '委托合同', '服务协议', '服务合同',
+        '授权委托书', '委托书',
         '申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '调查表', '汇总表',
         '协议', '合同', '契约', '协议书',
         '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
@@ -3612,8 +3615,8 @@
         '预警通知', '终止通知', '解除通知', '催收通知', '缴款通知',
         '公函', '律师函', '通知函', '催收函', '邀请函', '催告函', '回复函',
         '答复函', '复函', '工作函', '联系函', '商洽函', '询问函',
-        '告知函', '提示函', '警示函', '监管函', '函件', '函',
-        '委托书', '授权书', '任命书', '离职证明', '解约函',
+        '告知函', '提示函', '警示函', '监管函', '函件',
+        '任命书', '离职证明', '解约函',
         '收入证明', '在职证明', '资格证明', '身份证明', '资质证明', '证明',
         '保密承诺书', '合规承诺书', '交易承诺书', '风险承诺书',
         '投资协议书', '服务协议书', '合作协议书', '托管协议书',
@@ -3624,12 +3627,11 @@
       const keywords = [...new Set(rawKeywords)].sort((a, b) => b.length - a.length);
 
       const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-      const searchRange = Math.min(lines.length, 12);
+      const searchRange = Math.min(lines.length, 15);
 
-      // === 调试：打印前15行，方便排查 ===
       addDebugInfo('🔍 OCR前15行', lines.slice(0, 15).map((l, i) => `[${i+1}] ${l}`).join(' | '));
 
-      // 剥离前缀（版本号、编号等）并清理
+      // 剥离前缀（版本号、编号、备案编码等）
       function stripLine(line) {
         return line
           .replace(/^版本号[:：]?\s*\S+\s*/, '')
@@ -3637,55 +3639,66 @@
           .replace(/^合同编号[:：]?\s*\S+\s*/, '')
           .replace(/^协议编号[:：]?\s*\S+\s*/, '')
           .replace(/^文号[:：]?\s*\S+\s*/, '')
+          .replace(/^备案编码[:：]?\s*\S+\s*/, '')
+          .replace(/^备案编号[:：]?\s*\S+\s*/, '')
+          .replace(/^营业执照号码[:：]?\s*\S+\s*/, '')
+          .replace(/^机构代码[:：]?\s*\S+\s*/, '')
           .replace(/^[\d\.\s\u3000\u00A0]+/, '')
           .trim();
       }
 
-      // 正文行特征：明显不是标题
-      function isBodyLine(line) {
-        if (/^[一二三四五六七八九十百千]+[、\.]/.test(line)) return true; // "一、二、三、"开头
-        if (/^\(?[（(]?(?:是|否|√|×|X)[）)]?/.test(line)) return true; // "（是）"开头的选择项
-        if (/办理|业务|签约|撤销|账户|资金|客户|证券|期货|基金|代理|本人|机构|身份证/.test(line) && line.length > 20) return true;
-        if (/[。，；、,;:：]/.test(line) && line.length > 30) return true; // 含标点且长
-        if (line.length > 60) return true; // 超长行
-        return false;
+      // 清理提取的标题：去英文、去纯数字、去公司名
+      function cleanTitle(title) {
+        // 去掉纯英文或数字的段落
+        title = title.replace(/[A-Za-z]+/g, '');
+        // 去掉长数字串（如91440300087037980F）
+        title = title.replace(/[A-Fa-f0-9]{6,}/g, '');
+        // 去公司名后缀
+        title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
+        // 去标点
+        title = title.replace(/[：:]\s*$/, '');
+        // 去空格
+        title = title.replace(/\s+/g, '');
+        return title.trim();
       }
 
-      // === 1. 前12行，关键词匹配 ===
+      // 验证标题：必须有足够中文字符
+      function isValidTitle(title) {
+        const chineseCount = (title.match(/[\u4e00-\u9fa5]/g) || []).length;
+        const totalCount = title.length;
+        if (totalCount < 2) return false;
+        if (chineseCount < 2) return false;
+        if (chineseCount / totalCount < 0.5) return false;
+        return true;
+      }
+
+      // === 1. 前15行，关键词匹配（优先长关键词）===
       for (let i = 0; i < searchRange; i++) {
         let stripped = stripLine(lines[i]);
         if (stripped.length < 2 || stripped.length > 80) continue;
 
         for (const kw of keywords) {
           if (stripped.includes(kw)) {
-            // 关键词前面的内容（可能有logo文字、公司名等干扰）
+            // 关键词前面的内容
             let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-            // 关键词本身
             let title = kw;
 
-            // 判断关键词前面是否有"正文"（包含括号、标点等），如果有才保留
-            // 否则认为是logo/公司名/版本号，直接丢弃
-            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw)) {
-              // 前面有正文内容，保留
+            // 如果关键词前面有正文内容（括号/日期/较长文本），保留
+            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw) || beforeKw.length > 10) {
               title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
             }
-            // else: 直接用关键词本身，去掉前面的logo文字
 
-            title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
-            title = title.replace(/[：:]\s*$/, '');
-            title = title.replace(/\d{4}年\d{1,2}月\d{1,2}日?$/, '');
-            title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-            title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-            if (title.length >= 2) {
+            title = cleanTitle(title);
+
+            if (isValidTitle(title)) {
               addDebugInfo('✅ 单行业务匹配', `行${i+1} → kw=${kw} → ${title}`);
-              return title.trim();
+              return title;
             }
-            return kw;
           }
         }
       }
 
-      // === 1.5 跨两行合并匹配（OCR可能把标题拆成两行）===
+      // === 2. 跨两行合并匹配 ===
       for (let i = 0; i < searchRange - 1; i++) {
         let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
         if (combined.length < 4 || combined.length > 120) continue;
@@ -3695,53 +3708,58 @@
           if (combined.includes(kw)) {
             let beforeKw = combined.substring(0, combined.indexOf(kw));
             let title = kw;
-            // 如果前面有正文内容（括号/日期），保留
-            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw)) {
+            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw) || beforeKw.length > 10) {
               title = combined.substring(0, combined.indexOf(kw) + kw.length);
             }
-            title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
-            title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-            title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-            if (title.length >= 3) {
+            title = cleanTitle(title);
+            if (isValidTitle(title)) {
               addDebugInfo('✅ 跨行匹配', `行${i+1}+${i+2} → kw=${kw} → ${title}`);
-              return title.trim();
+              return title;
             }
           }
         }
       }
 
-      // === 2. 回退：从前12行中选最像标题的一行 ===
+      // === 3. 回退：评分选标题 ===
       let bestLine = '';
       let bestScore = -1;
       for (let i = 0; i < searchRange; i++) {
         let stripped = stripLine(lines[i]);
         if (stripped.length < 2) continue;
-        if (isBodyLine(stripped)) continue;
 
-        // 评分：长度适中（15-40字最佳）、无标点、含标题常见词加分
+        // 排除明显不是标题的行
+        if (/^[一二三四五六七八九十百千]+[、\.]/.test(stripped)) continue;
+        if (/^\(?[（(]?(?:是|否|√|×)[）)]?/.test(stripped)) continue;
+        if (/办理|业务|签约|撤销|账户|资金|客户|证券|期货|基金|代理|本人|机构|身份证/.test(stripped) && stripped.length > 20) continue;
+        if (/[。，；、,;:：]/.test(stripped) && stripped.length > 30) continue;
+        if (stripped.length > 60) continue;
+
+        // 清理后评分
+        let cleaned = cleanTitle(stripped);
+        if (!isValidTitle(cleaned)) continue;
+
         let score = 0;
-        if (stripped.length >= 4 && stripped.length <= 50) score += 50;
-        if (stripped.length >= 10 && stripped.length <= 40) score += 20;
+        if (cleaned.length >= 4 && cleaned.length <= 50) score += 50;
+        if (cleaned.length >= 10 && cleaned.length <= 40) score += 20;
         if (!/[。，；、,;]/.test(stripped)) score += 20;
-        if (/[书|表|告|函|知|议|明|同|托|诺|明|书|证|约|定]/.test(stripped)) score += 30; // 标题后缀字
-        // 行越靠前分数越高（标题一般在前面）
+        if (/[书|表|告|函|知|议|明|同|托|诺|证|约|定]/.test(cleaned)) score += 30;
         score += Math.max(0, 10 - i);
 
         if (score > bestScore) {
           bestScore = score;
-          bestLine = stripped;
+          bestLine = cleaned;
         }
       }
 
       if (bestLine) {
-        bestLine = bestLine.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
         addDebugInfo('🎯 回退选中行', bestLine + ` (score=${bestScore})`);
-        return bestLine.trim();
+        return bestLine;
       }
 
-      // === 3. 最终回退 ===
+      // === 4. 最终回退 ===
       for (const line of lines) {
-        if (line.length > 2 && line.length < 80) return line;
+        let cleaned = cleanTitle(line);
+        if (isValidTitle(cleaned) && cleaned.length > 2 && cleaned.length < 80) return cleaned;
       }
       return '';
     }
