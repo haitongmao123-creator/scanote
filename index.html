@@ -3546,11 +3546,17 @@
 
         addDebugInfo('🔍 启动本地OCR', '识别第1页（中英文）...');
 
-        // 创建Tesseract worker
+        let lastProgress = -1;
         const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1, {
           logger: m => {
             if (m.status === 'recognizing text') {
-              addDebugInfo('⏳ OCR识别中', Math.round(m.progress * 100) + '%');
+              const pct = Math.round(m.progress * 100);
+              // 只在每25%时记录一次，避免刷屏
+              const milestone = Math.floor(pct / 25) * 25;
+              if (milestone > lastProgress) {
+                lastProgress = milestone;
+                addDebugInfo('⏳ OCR识别中', pct + '%');
+              }
             }
           }
         });
@@ -3563,13 +3569,10 @@
         pageText = pageText.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
         // 去掉中文之间的空格（保留英文单词间的空格）
         pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-        // 多次替换以确保连续中文空格被完全清除
         pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
         // 去掉中文和数字之间的空格
         pageText = pageText.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
         pageText = pageText.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
-        // 去掉中文和括号之间的空格
-        pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([（）【】])/g, '$1$2');
 
         addDebugInfo('📝 OCR结果(第1页,清理后)', pageText.slice(0, 300));
 
@@ -3584,7 +3587,7 @@
     function extractTitleFromOCRText(text) {
       if (!text || text.trim().length === 0) return '';
 
-      // 标题关键词（与文本块处理保持一致）
+      // 标题关键词
       const highPriorityKeywords = [
         '申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '调查表', '汇总表',
         '协议', '合同', '契约', '协议书',
@@ -3593,14 +3596,14 @@
         '尽职调查报告', '财务报告', '审计报告', '评估报告', '咨询报告', '情况报告',
         '情况说明', '工作说明', '补充说明', '澄清说明', '使用说明', '操作说明',
         '系统说明', '产品说明', '业务说明', '交易说明', '结算说明', '资金说明',
-        '清算说明', '整改说明', '说明报告', '说明函',
+        '清算说明', '整改说明', '说明报告', '说明函', '说明',
         '处罚通知', '处理通知', '变更通知', '调整通知', '到期通知', '续约通知',
         '预警通知', '终止通知', '解除通知', '催收通知', '缴款通知',
         '公函', '律师函', '通知函', '催收函', '邀请函', '催告函', '回复函',
         '答复函', '复函', '工作函', '联系函', '商洽函', '询问函',
-        '告知函', '提示函', '警示函', '监管函', '函件',
+        '告知函', '提示函', '警示函', '监管函', '函件', '函',
         '委托书', '授权书', '任命书', '离职证明', '解约函',
-        '收入证明', '在职证明', '资格证明', '身份证明', '资质证明',
+        '收入证明', '在职证明', '资格证明', '身份证明', '资质证明', '证明',
         '保密承诺书', '合规承诺书', '交易承诺书', '风险承诺书',
         '投资协议书', '服务协议书', '合作协议书', '托管协议书',
         '情况反映', '情况汇报', '情况通报',
@@ -3608,48 +3611,43 @@
         '决议', '纪要', '公告', '通报'
       ];
 
-      // 按长度降序排列关键词（优先匹配更长的关键词）
-      const sortedKeywords = [...highPriorityKeywords].sort((a, b) => b.length - a.length);
+      // 按行分割OCR文本
+      const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-      // 在OCR文本中搜索关键词
-      for (const keyword of sortedKeywords) {
-        const idx = text.indexOf(keyword);
-        if (idx >= 0) {
-          // 从文本开头或上一个句子分隔符开始，到关键词结束
-          let start = 0;
-          const beforeKeyword = text.substring(0, idx);
-          const separators = ['。', '！', '？', '；', '\n', '；'];
-          for (const sep of separators) {
-            const sepIdx = beforeKeyword.lastIndexOf(sep);
-            if (sepIdx >= 0 && sepIdx + 1 > start) {
-              start = sepIdx + 1;
-            }
-          }
+      // 从前5行中找包含关键词的行，直接返回该行作为标题
+      for (let i = 0; i < Math.min(lines.length, 5); i++) {
+        const line = lines[i];
+        if (line.length < 3 || line.length > 100) continue;
 
-          let title = text.substring(start, idx + keyword.length).trim();
-          // 清理标题
-          title = title.replace(/[^\u4e00-\u9fa5a-zA-Z0-9（）【】\-\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        // 跳过纯数字或日期行
+        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) continue;
+        if (/^\d+$/.test(line.replace(/\s/g, ''))) continue;
 
-          if (title.length > 3 && title.length <= 50) {
+        // 检查是否包含关键词
+        const hasKeyword = highPriorityKeywords.some(kw => line.includes(kw));
+        if (hasKeyword) {
+          // 清理前缀（如"关于"、"附"、"1."等）
+          let title = line
+            .replace(/^[\d\.\s\u3000\u00A0]+/, '')
+            .replace(/^[附附]+[表表格格]?[\s:：]+/, '')
+            .replace(/^关于/, '')
+            .trim();
+          // 去掉中文间空格
+          title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+          title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+          if (title.length > 3) {
             return title;
           }
+          return line;
         }
       }
 
-      // 如果没有找到关键词，尝试第一句话
-      const firstSentence = text.split(/[。！？\n]/)[0].trim();
-      if (firstSentence.length > 3 && firstSentence.length < 100) {
-        let title = firstSentence.replace(/[^\u4e00-\u9fa5a-zA-Z0-9（）【】\-\s]/g, ' ').replace(/\s+/g, ' ').trim();
-        if (title.length > 50) title = title.substring(0, 50);
-        return title;
-      }
-
-      // 最后尝试第一行
-      const firstLine = text.split('\n')[0].trim();
-      if (firstLine.length > 3 && firstLine.length < 100) {
-        let title = firstLine.replace(/[^\u4e00-\u9fa5a-zA-Z0-9（）【】\-\s]/g, ' ').replace(/\s+/g, ' ').trim();
-        if (title.length > 50) title = title.substring(0, 50);
-        return title;
+      // 没有关键词匹配，直接返回第一行有效文本
+      for (const line of lines) {
+        if (line.length < 3 || line.length > 100) continue;
+        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) continue;
+        if (/^\d+$/.test(line.replace(/\s/g, ''))) continue;
+        return line;
       }
 
       return '';
