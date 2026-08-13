@@ -3601,7 +3601,7 @@
         '承诺书和风险提示书', '承诺书和风险揭示书',
         '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
         '证券账户业务申请表', '基金账户业务申请表', '账户业务申请表',
-        '私募投资基金备案证明', '备案证明',
+        '私募投资基金备案证明', '备案证明', '私募投资基金备案函', '备案函', '基金备案函',
         '业务确认书', '交易确认书',
         '开户合同', '开户协议', '开户申请书', '交易申请书', '交易协议',
         '托管协议', '托管合同', '顾问协议', '顾问合同', '合伙协议',
@@ -3611,7 +3611,7 @@
         '协议', '合同', '契约', '协议书',
         '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
         '提示书', '揭示书', '风险揭示书', '风险提示书', '合规意见书', '法律意见书',
-        '尽职调查报告', '财务报告', '审计报告', '评估报告', '咨询报告', '情况报告',
+        '尽职调查报告', '财务报告', '审计报告', '财务审计报告', '评估报告', '咨询报告', '情况报告',
         '情况说明', '工作说明', '补充说明', '澄清说明', '使用说明', '操作说明',
         '系统说明', '产品说明', '业务说明', '交易说明', '结算说明', '资金说明',
         '清算说明', '整改说明', '说明报告', '说明函', '说明',
@@ -3626,7 +3626,7 @@
         '投资协议书', '服务协议书', '合作协议书', '托管协议书',
         '情况反映', '情况汇报', '情况通报',
         '意向书', '谅解备忘录', '合作备忘录', '备忘录', '要约',
-        '决议', '纪要', '公告', '通报'
+        '决议', '纪要', '公告', '通报', '通知', '报告'
       ];
       const keywords = [...new Set(rawKeywords)].sort((a, b) => b.length - a.length);
 
@@ -3647,18 +3647,21 @@
           .replace(/^备案编号[:：]?\s*\S+\s*/, '')
           .replace(/^营业执照号码[:：]?\s*\S+\s*/, '')
           .replace(/^机构代码[:：]?\s*\S+\s*/, '')
-          .replace(/^[\d\.\s\u3000\u00A0]+/, '')
+          // 只去掉"数字+标点"格式的编号前缀（如"1. "、"1、"、"(1)"），保留年份如"2024年度"
+          .replace(/^\d+[\.、\)\]\s\u3000]+/, '')
+          .replace(/^[\(\（]\d+[\)\）]\s*/, '')
+          .replace(/^[\s\u3000]+/, '')
           .trim();
       }
 
-      // 清理提取的标题：去英文、去纯数字、去公司名
+      // 清理提取的标题：去英文、去纯数字
       function cleanTitle(title) {
         // 去掉纯英文或数字的段落
         title = title.replace(/[A-Za-z]+/g, '');
         // 去掉长数字串（如91440300087037980F）
         title = title.replace(/[A-Fa-f0-9]{6,}/g, '');
-        // 去公司名后缀
-        title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
+        // 只去结尾典型公司名（保守：仅去掉<2-6字修饰> + 有限/股份/合伙/集团 + 公司/企业）
+        title = title.replace(/[\u4e00-\u9fa5]{1,8}(?:有限|股份|合伙|集团)?(?:公司|企业)$/, '');
         // 去标点
         title = title.replace(/[：:]\s*$/, '');
         // 去空格
@@ -3676,6 +3679,21 @@
         return true;
       }
 
+      // 判断前缀是否有意义（区分长短：短前缀宽松，长前缀必须含年份/文号）
+      function isMeaningfulPrefix(p) {
+        if (!p) return false;
+        // 含有典型垃圾标签前缀 → 无意义
+        if (/(代码|编号|编码|号码|证号|信用代码|日期|申请日期|签发日期|版本号|文号|机构代码|营业执照|社会信用)/.test(p)) return false;
+        // 含有"："或":"（典型 label:value 格式）→ 无意义
+        if (/[:：]/.test(p)) return false;
+        const hasYearDocNo = /\d{4}年/.test(p) || /\d{4}年度$/.test(p) || /第[一二三四五六七八九十百千0-9]+号/.test(p);
+        // 长前缀(>15字)：仅含年份/文号的正式公文才保留，否则视为过长修饰
+        if (p.length > 15) return hasYearDocNo && /^关于/.test(p) && /的$/.test(p);
+        // 中等长度前缀(<=15字)：关于...的 / 年份 / 文号 都算有意义
+        if (/^关于/.test(p) && /的$/.test(p)) return true;
+        return hasYearDocNo;
+      }
+
       // === 1. 前15行，先尝试跨行合并匹配（更长关键词更精准，优先）===
       for (let i = 0; i < searchRange - 1; i++) {
         let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
@@ -3686,12 +3704,35 @@
           if (combined.includes(kw)) {
             let beforeKw = combined.substring(0, combined.indexOf(kw));
             let title = kw;
-            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw) || beforeKw.length > 10) {
+            // 保留前缀的条件：意义明确，且非标签类垃圾
+            if (isMeaningfulPrefix(beforeKw)) {
               title = combined.substring(0, combined.indexOf(kw) + kw.length);
             }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
               addDebugInfo('✅ 跨行匹配(优先)', `行${i+1}+${i+2} → kw=${kw} → ${title}`);
+              return title;
+            }
+          }
+        }
+      }
+
+      // === 1.5 跨行短关键词 + 有意义前缀（如：关于XX的通知/2024年度审计报告，这类跨两行且关键词短于6字的）===
+      for (let i = 0; i < searchRange - 1; i++) {
+        let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+        if (combined.length < 6 || combined.length > 120) continue;
+
+        for (const kw of keywords) {
+          if (kw.length > 5) continue; // 只匹配短关键词（<=5字），长关键词已经在上一步处理
+          if (kw.length < 2) continue;
+          if (combined.includes(kw)) {
+            let beforeKw = combined.substring(0, combined.indexOf(kw));
+            // 只有前缀有意义才保留（关于...的/年份/文号）
+            if (!isMeaningfulPrefix(beforeKw)) continue;
+            let title = combined.substring(0, combined.indexOf(kw) + kw.length);
+            title = cleanTitle(title);
+            if (isValidTitle(title)) {
+              addDebugInfo('✅ 跨行短词匹配', `行${i+1}+${i+2} → kw=${kw} → ${title}`);
               return title;
             }
           }
@@ -3707,12 +3748,31 @@
           if (stripped.includes(kw)) {
             let beforeKw = stripped.substring(0, stripped.indexOf(kw));
             let title = kw;
-            if (/[（(][)）:：]/.test(beforeKw) || /\d{4}年/.test(beforeKw) || beforeKw.length > 10) {
+            if (isMeaningfulPrefix(beforeKw)) {
               title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
             }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
               addDebugInfo('✅ 单行匹配', `行${i+1} → kw=${kw} → ${title}`);
+              return title;
+            }
+          }
+        }
+      }
+
+      // === 2.5 单行匹配：有意义前缀（针对单行内"关于XX的XX"、"2024年XX"这种）===
+      for (let i = 0; i < searchRange; i++) {
+        let stripped = stripLine(lines[i]);
+        if (stripped.length < 6 || stripped.length > 80) continue;
+        for (const kw of keywords) {
+          if (kw.length > 5 || kw.length < 2) continue; // 只对短关键词做特殊处理
+          if (stripped.includes(kw)) {
+            let beforeKw = stripped.substring(0, stripped.indexOf(kw));
+            if (!isMeaningfulPrefix(beforeKw)) continue;
+            let title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+            title = cleanTitle(title);
+            if (isValidTitle(title)) {
+              addDebugInfo('✅ 单行短词+前缀', `行${i+1} → kw=${kw} → ${title}`);
               return title;
             }
           }
@@ -3732,6 +3792,8 @@
         if (/办理|业务|签约|撤销|账户|资金|客户|证券|期货|基金|代理|本人|机构|身份证/.test(stripped) && stripped.length > 20) continue;
         if (/[。，；、,;:：]/.test(stripped) && stripped.length > 30) continue;
         if (stripped.length > 60) continue;
+        // 排除典型正文开头
+        if (/^(根据|依据|按照|为了|为进一步|鉴于|经研究|现通知|现公告|现函|尊敬的|各部门|各营业部|客户|股东|全体|地址|电话|传真|邮编|邮箱|联系人|基金类型|基金名称|管理人|托管人|法定代表人|执行事务合伙人)/.test(stripped)) continue;
 
         // 清理后评分
         let cleaned = cleanTitle(stripped);
@@ -3889,18 +3951,31 @@
         // 统一清理标题（去前缀、去英文、按关键词截断正文尾）
         function universalCleanTitle(t) {
           if (!t) return '';
-          t = t.replace(/^(?:备案编码|备案编号|版本号|合同编号|协议编号|营业执照号码|编号)[:：]?\s*[A-Za-z0-9]{1,20}\s*/, '');
+          // 去掉各类"标签:值"格式前缀（标签名+冒号+到下一个汉字标题前的内容）
+          t = t.replace(/^(?:备案编码|备案编号|版本号|合同编号|协议编号|营业执照号码|编号|统一社会信用代码|社会信用代码|身份证号|证件号|机构代码|营业执照|申请日期|签发日期|日期|文号|账户号码|客户编号)[:：]?\s*[A-Za-z0-9\-]{0,30}\s*/, '');
           t = t.replace(/^备案编码[A-Za-z0-9]+/, '');
           t = t.replace(/[A-Za-z]/g, '');
           t = t.replace(/[0-9]{6,}/g, '');
           t = t.replace(/\s+/g, ' ').trim();
-          // 关键词截断结尾
+          // 关键词截断：若找到关键词，从关键词开头位置取到结尾（去掉关键词前的垃圾前缀）
           const cutKeywords = ['私募投资基金备案证明','备案证明','授权委托书','证券账户业务申请表','基金账户业务申请表','账户业务申请表','接入外部信息系统承诺书和风险提示书','接入外部信息系统承诺书和风险揭示书','承诺书和风险提示书','承诺书和风险揭示书','申请表','申请单','登记表','审批表','审核表','协议书','承诺书','确认书','告知书','通知书','声明书','说明书','风险揭示书','风险提示书','合规意见书','法律意见书','尽职调查报告','审计报告','评估报告','咨询报告','情况报告','情况说明','工作说明','补充说明','澄清说明','使用说明','操作说明','业务说明','交易说明','说明函','律师函','通知函','催收函','邀请函','催告函','回复函','答复函','复函','工作函','联系函','商洽函','询问函','告知函','提示函','警示函','监管函','函件','委托书','授权书','任命书','离职证明','解约函','收入证明','在职证明','资格证明','身份证明','资质证明','证明','保密承诺书','合规承诺书','交易承诺书','风险承诺书','投资协议书','服务协议书','合作协议书','托管协议书','情况反映','情况汇报','情况通报','意向书','谅解备忘录','合作备忘录','备忘录','协议','合同','要约','决议','纪要','公告','通报','处罚通知','处理通知','变更通知','调整通知','到期通知','续约通知','预警通知','终止通知','解除通知','催收通知','缴款通知'];
           cutKeywords.sort((a, b) => b.length - a.length);
           for (const kw of cutKeywords) {
             const idx = t.indexOf(kw);
             if (idx >= 0) {
-              t = t.substring(0, idx + kw.length);
+              const prefixUpToKw = t.substring(0, idx);
+              const meaningfulBefore = (/^关于.+的$/.test(prefixUpToKw) ||
+                /第[一二三四五六七八九十百千0-9]+号/.test(prefixUpToKw) ||
+                /\d{4}年/.test(prefixUpToKw) ||
+                /\d{4}年度$/.test(prefixUpToKw)) &&
+                prefixUpToKw.length < 40;
+              if (meaningfulBefore) {
+                // 有意义前缀，保留整段
+                t = t.substring(0, idx + kw.length);
+              } else {
+                // 无意义前缀或前缀过远，从关键词开始截取
+                t = t.substring(idx, idx + kw.length);
+              }
               break;
             }
           }
