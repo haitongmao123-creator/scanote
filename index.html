@@ -3528,6 +3528,130 @@
       });
     }
 
+    // OCR识别（扫描型PDF）- 使用Tesseract.js本地识别
+    async function performOCR(file) {
+      try {
+        // 渲染PDF第1页到canvas
+        const typedarray = new Uint8Array(await file.arrayBuffer());
+        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+        const maxPages = Math.min(pdf.numPages, 2);
+        let allText = '';
+
+        for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+          const page = await pdf.getPage(pageNum);
+          const scale = 2;
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+          await page.render({ canvasContext: context, viewport }).promise;
+          addDebugInfo('🖼️ 渲染页面', `第${pageNum}页 ${canvas.width}x${canvas.height}`);
+
+          addDebugInfo('🔍 启动本地OCR', `识别第${pageNum}页（中英文）...`);
+
+          // 创建Tesseract worker
+          const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1, {
+            logger: m => {
+              if (m.status === 'recognizing text') {
+                addDebugInfo('⏳ OCR识别中', Math.round(m.progress * 100) + '%');
+              }
+            }
+          });
+
+          const result = await worker.recognize(canvas);
+          await worker.terminate();
+
+          let pageText = result.data.text || '';
+          // 清理OCR文本
+          pageText = pageText.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
+          allText += pageText + '\n';
+
+          addDebugInfo(`📝 OCR结果(第${pageNum}页,清理后)`, pageText.slice(0, 300));
+        }
+
+        return allText.trim();
+      } catch (err) {
+        addDebugInfo('❌ OCR失败', err.message);
+        throw err;
+      }
+    }
+
+    // 从OCR文本中提取标题
+    function extractTitleFromOCRText(text) {
+      if (!text || text.trim().length === 0) return '';
+
+      // 标题关键词（与文本块处理保持一致）
+      const highPriorityKeywords = [
+        '申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '调查表', '汇总表',
+        '协议', '合同', '契约', '协议书',
+        '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
+        '提示书', '揭示书', '风险揭示书', '风险提示书', '合规意见书', '法律意见书',
+        '尽职调查报告', '财务报告', '审计报告', '评估报告', '咨询报告', '情况报告',
+        '情况说明', '工作说明', '补充说明', '澄清说明', '使用说明', '操作说明',
+        '系统说明', '产品说明', '业务说明', '交易说明', '结算说明', '资金说明',
+        '清算说明', '整改说明', '说明报告', '说明函',
+        '处罚通知', '处理通知', '变更通知', '调整通知', '到期通知', '续约通知',
+        '预警通知', '终止通知', '解除通知', '催收通知', '缴款通知',
+        '公函', '律师函', '通知函', '催收函', '邀请函', '催告函', '回复函',
+        '答复函', '复函', '工作函', '联系函', '商洽函', '询问函',
+        '告知函', '提示函', '警示函', '监管函', '函件',
+        '委托书', '授权书', '任命书', '离职证明', '解约函',
+        '收入证明', '在职证明', '资格证明', '身份证明', '资质证明',
+        '保密承诺书', '合规承诺书', '交易承诺书', '风险承诺书',
+        '投资协议书', '服务协议书', '合作协议书', '托管协议书',
+        '情况反映', '情况汇报', '情况通报',
+        '意向书', '谅解备忘录', '合作备忘录', '备忘录', '要约',
+        '决议', '纪要', '公告', '通报'
+      ];
+
+      // 按长度降序排列关键词（优先匹配更长的关键词）
+      const sortedKeywords = [...highPriorityKeywords].sort((a, b) => b.length - a.length);
+
+      // 在OCR文本中搜索关键词
+      for (const keyword of sortedKeywords) {
+        const idx = text.indexOf(keyword);
+        if (idx >= 0) {
+          // 从文本开头或上一个句子分隔符开始，到关键词结束
+          let start = 0;
+          const beforeKeyword = text.substring(0, idx);
+          const separators = ['。', '！', '？', '；', '\n', '；'];
+          for (const sep of separators) {
+            const sepIdx = beforeKeyword.lastIndexOf(sep);
+            if (sepIdx >= 0 && sepIdx + 1 > start) {
+              start = sepIdx + 1;
+            }
+          }
+
+          let title = text.substring(start, idx + keyword.length).trim();
+          // 清理标题
+          title = title.replace(/[^\u4e00-\u9fa5a-zA-Z0-9（）【】\-\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+          if (title.length > 3 && title.length <= 50) {
+            return title;
+          }
+        }
+      }
+
+      // 如果没有找到关键词，尝试第一句话
+      const firstSentence = text.split(/[。！？\n]/)[0].trim();
+      if (firstSentence.length > 3 && firstSentence.length < 100) {
+        let title = firstSentence.replace(/[^\u4e00-\u9fa5a-zA-Z0-9（）【】\-\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (title.length > 50) title = title.substring(0, 50);
+        return title;
+      }
+
+      // 最后尝试第一行
+      const firstLine = text.split('\n')[0].trim();
+      if (firstLine.length > 3 && firstLine.length < 100) {
+        let title = firstLine.replace(/[^\u4e00-\u9fa5a-zA-Z0-9（）【】\-\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (title.length > 50) title = title.substring(0, 50);
+        return title;
+      }
+
+      return '';
+    }
+
     // PDF Text Extraction (Local Mode) - Improved!
     async function extractTextFromPDF(file) {
       try {
@@ -3573,6 +3697,20 @@
           addDebugInfo('📝 提取的文本', (text || '').slice(0, 200));
         } catch (err) {
           addDebugInfo('❌ 文本提取错误', err.message);
+        }
+
+        // 2.5 如果文本层为空（扫描型PDF），启动OCR识别
+        let ocrText = '';
+        if (textBlocks.length === 0 && (!text || text.trim().length === 0)) {
+          addDebugInfo('🔎 检测到扫描型PDF', '文字层为空，启动本地OCR识别');
+          try {
+            ocrText = await performOCR(file);
+            if (ocrText) {
+              addDebugInfo('📝 OCR文本', ocrText.slice(0, 200));
+            }
+          } catch (ocrErr) {
+            addDebugInfo('❌ OCR识别失败', ocrErr.message);
+          }
         }
 
         // 3. 尝试获取PDF元数据
@@ -3781,12 +3919,12 @@
         else if (text && text.trim().length > 0) {
           const lines = text.split('\n').filter(l => l.trim().length > 2);
           addDebugInfo('🔍 找到的文本行', lines.slice(0, 5).join('\n'));
-          
+
           for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed.length > 3 && trimmed.length < 100) {
               // 跳过纯数字或日期
-              if (!/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(trimmed) && 
+              if (!/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(trimmed) &&
                   !/^\d{8}$/.test(trimmed)) {
                 extractedTitle = trimmed;
                 addDebugInfo('✅ 使用文本标题', extractedTitle);
@@ -3794,6 +3932,17 @@
               }
             }
           }
+        }
+
+        // OCR文本标题提取（扫描型PDF）
+        if (!extractedTitle && ocrText) {
+          addDebugInfo('🔍 OCR文本行(清理后)', ocrText.slice(0, 300));
+          const ocrTitle = extractTitleFromOCRText(ocrText);
+          if (ocrTitle) {
+            extractedTitle = ocrTitle;
+            addDebugInfo('✅ OCR顶部文本标题', extractedTitle);
+          }
+          addDebugInfo('🏷️ OCR最终标题', extractedTitle || '未识别');
         }
 
         // 5. 如果都没找到，使用文件名
