@@ -160,6 +160,26 @@
       align-items: center;
       justify-content: space-between;
       margin-bottom: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .debug-toggle {
+      width: 18px;
+      height: 18px;
+      transition: transform 0.2s;
+    }
+
+    .debug-toggle.collapsed {
+      transform: rotate(-90deg);
+    }
+
+    .debug-panel.collapsed .debug-content {
+      display: none;
+    }
+
+    .debug-panel.collapsed {
+      padding-bottom: 8px;
     }
 
     .debug-panel-title {
@@ -2892,14 +2912,17 @@
       </div>
 
       <!-- Debug Panel -->
-      <div class="debug-panel" style="position: relative;">
-        <div class="debug-panel-header">
+      <div class="debug-panel collapsed" id="debug-panel">
+        <div class="debug-panel-header" id="debug-panel-header">
           <div class="debug-panel-title">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
             </svg>
             识别调试信息
           </div>
+          <svg class="debug-toggle collapsed" id="debug-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 9l-7 7-7-7"></path>
+          </svg>
         </div>
         <div class="debug-content" id="debug-content">
           拖入PDF文件后这里会显示识别信息...
@@ -3117,6 +3140,9 @@
       }
       debugContent.appendChild(debugItem);
       debugContent.scrollTop = debugContent.scrollHeight;
+      // Auto-expand on new debug info
+      $('debug-panel').classList.remove('collapsed');
+      $('debug-toggle').classList.remove('collapsed');
     }
 
     function clearDebugInfo() {
@@ -3258,6 +3284,12 @@
 
     setupSettingsToggle('email-settings-header', 'email-settings-content', 'email-settings-toggle');
     setupSettingsToggle('naming-settings-header', 'naming-settings-content', 'naming-settings-toggle');
+
+    // Debug panel toggle
+    $('debug-panel-header').addEventListener('click', () => {
+      $('debug-panel').classList.toggle('collapsed');
+      $('debug-toggle').classList.toggle('collapsed');
+    });
 
     // AI Mode Toggle
     $('ai-mode-toggle').addEventListener('click', function() {
