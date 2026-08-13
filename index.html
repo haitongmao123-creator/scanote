@@ -3635,32 +3635,43 @@
         const line = lines[i];
         if (line.length < 2 || line.length > 80) continue;
 
-        // 跳过版本号/编号行
-        if (/^(?:版本号|编号|合同编号|协议编号|文号|编号[:：])/.test(line)) continue;
-        // 跳过纯日期行
-        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) continue;
-        if (/^\d+$/.test(line.replace(/\s/g, ''))) continue;
-        // 跳过含大量正文标点的行
-        if (line.length > 5 && /[。，；]/.test(line)) continue;
+        // 剥离版本号/编号等前缀，得到"纯文本"
+        let strippedLine = line
+          .replace(/^版本号[:：]?\s*\S+\s*/, '')
+          .replace(/^编号[:：]?\s*\S+\s*/, '')
+          .replace(/^合同编号[:：]?\s*\S+\s*/, '')
+          .replace(/^协议编号[:：]?\s*\S+\s*/, '')
+          .replace(/^文号[:：]?\s*\S+\s*/, '')
+          .replace(/^[\d\.\s\u3000\u00A0]+/, '')
+          .trim();
 
-        // 从长关键词开始匹配
+        // 如果剥离后没有内容，跳过
+        if (strippedLine.length < 2) continue;
+
+        // 跳过纯日期行
+        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(strippedLine)) continue;
+        if (/^\d+$/.test(strippedLine)) continue;
+        // 跳过含大量正文标点的行
+        if (strippedLine.length > 5 && /[。，；]/.test(strippedLine)) continue;
+
+        // 从长关键词开始匹配（在剥离后的文本中搜索）
         for (const kw of keywords) {
-          if (line.includes(kw)) {
-            // 提取：关键词之前的内容（通常没有）+ 关键词
-            let title = line.substring(0, line.indexOf(kw) + kw.length);
-            // 清理
-            title = title.replace(/^版本号[:：]?\s*\S+\s*/, '');
-            title = title.replace(/^编号[:：]?\s*\S+\s*/, '');
-            title = title.replace(/^[\d\.\s\u3000\u00A0]+/, '');
-            title = title.replace(/[：:]\s*$/, '');
+          if (strippedLine.includes(kw)) {
+            // 截取：关键词之前的内容 + 关键词
+            let title = strippedLine.substring(0, strippedLine.indexOf(kw) + kw.length);
             // 去掉关键词后面的公司名
             title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
+            // 去掉末尾冒号/日期
+            title = title.replace(/[：:]\s*$/, '');
+            title = title.replace(/\d{4}年\d{1,2}月\d{1,2}日?$/, '');
             // 去掉中文间空格
             title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
             title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
             if (title.length >= 2) {
               return title.trim();
             }
+            // 兜底：直接返回关键词
+            return kw;
           }
         }
       }
@@ -3668,9 +3679,12 @@
       // 回退：从前8行取最长的有效行作为标题
       let bestLine = '';
       for (let i = 0; i < searchRange; i++) {
-        const line = lines[i];
+        let line = lines[i];
+        // 同样剥离前缀
+        line = line.replace(/^版本号[:：]?\s*\S+\s*/, '')
+          .replace(/^编号[:：]?\s*\S+\s*/, '')
+          .replace(/^[\d\.\s\u3000\u00A0]+/, '').trim();
         if (line.length < 2 || line.length > 60) continue;
-        if (/^(?:版本号|编号|合同编号|协议编号|文号)/.test(line)) continue;
         if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line)) continue;
         if (/[。，；]/.test(line) && line.length > 20) continue;
         if (line.length > bestLine.length) {
