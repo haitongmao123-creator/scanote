@@ -3528,49 +3528,52 @@
       });
     }
 
-    // OCR识别（扫描型PDF）- 使用Tesseract.js本地识别
+    // OCR识别（扫描型PDF）- 使用Tesseract.js本地识别，仅识别第1页
     async function performOCR(file) {
       try {
-        // 渲染PDF第1页到canvas
         const typedarray = new Uint8Array(await file.arrayBuffer());
         const pdf = await pdfjsLib.getDocument(typedarray).promise;
-        const maxPages = Math.min(pdf.numPages, 2);
-        let allText = '';
+        const page = await pdf.getPage(1);
 
-        for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-          const page = await pdf.getPage(pageNum);
-          const scale = 2;
-          const viewport = page.getViewport({ scale });
-          const canvas = document.createElement('canvas');
-          const context = canvas.getContext('2d');
-          canvas.height = viewport.height;
-          canvas.width = viewport.width;
-          await page.render({ canvasContext: context, viewport }).promise;
-          addDebugInfo('🖼️ 渲染页面', `第${pageNum}页 ${canvas.width}x${canvas.height}`);
+        const scale = 2;
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        await page.render({ canvasContext: context, viewport }).promise;
+        addDebugInfo('🖼️ 渲染页面', `第1页 ${canvas.width}x${canvas.height}`);
 
-          addDebugInfo('🔍 启动本地OCR', `识别第${pageNum}页（中英文）...`);
+        addDebugInfo('🔍 启动本地OCR', '识别第1页（中英文）...');
 
-          // 创建Tesseract worker
-          const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1, {
-            logger: m => {
-              if (m.status === 'recognizing text') {
-                addDebugInfo('⏳ OCR识别中', Math.round(m.progress * 100) + '%');
-              }
+        // 创建Tesseract worker
+        const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1, {
+          logger: m => {
+            if (m.status === 'recognizing text') {
+              addDebugInfo('⏳ OCR识别中', Math.round(m.progress * 100) + '%');
             }
-          });
+          }
+        });
 
-          const result = await worker.recognize(canvas);
-          await worker.terminate();
+        const result = await worker.recognize(canvas);
+        await worker.terminate();
 
-          let pageText = result.data.text || '';
-          // 清理OCR文本
-          pageText = pageText.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
-          allText += pageText + '\n';
+        let pageText = result.data.text || '';
+        // 清理OCR文本：去掉竖线、多余空行
+        pageText = pageText.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
+        // 去掉中文之间的空格（保留英文单词间的空格）
+        pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+        // 多次替换以确保连续中文空格被完全清除
+        pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+        // 去掉中文和数字之间的空格
+        pageText = pageText.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
+        pageText = pageText.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
+        // 去掉中文和括号之间的空格
+        pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([（）【】])/g, '$1$2');
 
-          addDebugInfo(`📝 OCR结果(第${pageNum}页,清理后)`, pageText.slice(0, 300));
-        }
+        addDebugInfo('📝 OCR结果(第1页,清理后)', pageText.slice(0, 300));
 
-        return allText.trim();
+        return pageText;
       } catch (err) {
         addDebugInfo('❌ OCR失败', err.message);
         throw err;
@@ -3947,12 +3950,18 @@
 
         // 5. 如果都没找到，使用文件名
         let finalTitle = extractedTitle || filenameWithoutExt;
-        
+
         // 清理标题
         finalTitle = finalTitle
-          .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, ' ')
+          .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s（）【】\-]/g, ' ')
           .replace(/\s+/g, ' ')
           .trim();
+        // 去掉中文之间的空格
+        finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+        finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+        // 去掉中文和数字之间的空格
+        finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
+        finalTitle = finalTitle.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
         
         addDebugInfo('🏷️ 最终标题', finalTitle);
 
