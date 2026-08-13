@@ -3614,23 +3614,28 @@
       // 按行分割OCR文本
       const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-      // 从前5行中找包含关键词的行，直接返回该行作为标题
+      // 判断是否为标题行（而非正文）
+      function isTitleLine(line) {
+        if (line.length < 3 || line.length > 60) return false;
+        // 跳过纯数字或日期
+        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) return false;
+        if (/^\d+$/.test(line.replace(/\s/g, ''))) return false;
+        // 标题行不应包含句号、逗号等正文标点
+        if (/[。，；、,;.]/.test(line)) return false;
+        return true;
+      }
+
+      // 从前5行中找包含关键词的标题行
       for (let i = 0; i < Math.min(lines.length, 5); i++) {
         const line = lines[i];
-        if (line.length < 3 || line.length > 100) continue;
-
-        // 跳过纯数字或日期行
-        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) continue;
-        if (/^\d+$/.test(line.replace(/\s/g, ''))) continue;
+        if (!isTitleLine(line)) continue;
 
         // 检查是否包含关键词
         const hasKeyword = highPriorityKeywords.some(kw => line.includes(kw));
         if (hasKeyword) {
-          // 清理前缀（如"关于"、"附"、"1."等）
           let title = line
             .replace(/^[\d\.\s\u3000\u00A0]+/, '')
             .replace(/^[附附]+[表表格格]?[\s:：]+/, '')
-            .replace(/^关于/, '')
             .trim();
           // 去掉中文间空格
           title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
@@ -3642,7 +3647,13 @@
         }
       }
 
-      // 没有关键词匹配，直接返回第一行有效文本
+      // 没有关键词匹配，找第一个标题行
+      for (const line of lines) {
+        if (!isTitleLine(line)) continue;
+        return line;
+      }
+
+      // 如果标题行过滤太严格，放宽限制取第一行有效文本
       for (const line of lines) {
         if (line.length < 3 || line.length > 100) continue;
         if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line) || /^\d{8}$/.test(line)) continue;
