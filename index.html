@@ -3602,6 +3602,7 @@
         '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
         '证券账户业务申请表', '基金账户业务申请表', '账户业务申请表',
         '私募投资基金备案证明', '备案证明', '私募投资基金备案函', '备案函', '基金备案函',
+        '银行账户信息确认函', '托管信息确认函', '账户信息确认函', '信息确认函', '业务确认函', '交易确认函', '确认函',
         '业务确认书', '交易确认书',
         '开户合同', '开户协议', '开户申请书', '交易申请书', '交易协议',
         '托管协议', '托管合同', '顾问协议', '顾问合同', '合伙协议',
@@ -3619,7 +3620,7 @@
         '预警通知', '终止通知', '解除通知', '催收通知', '缴款通知',
         '公函', '律师函', '通知函', '催收函', '邀请函', '催告函', '回复函',
         '答复函', '复函', '工作函', '联系函', '商洽函', '询问函',
-        '告知函', '提示函', '警示函', '监管函', '函件',
+        '告知函', '提示函', '警示函', '监管函', '函件', '函',
         '任命书', '离职证明', '解约函',
         '收入证明', '在职证明', '资格证明', '身份证明', '资质证明', '证明',
         '保密承诺书', '合规承诺书', '交易承诺书', '风险承诺书',
@@ -3745,6 +3746,8 @@
         if (stripped.length < 2 || stripped.length > 80) continue;
 
         for (const kw of keywords) {
+          // 超短关键词（≤2字）只在前5行匹配，防止正文中的"公告/通知/报告/函"等词被误当标题
+          if (kw.length <= 2 && i >= 5) continue;
           if (stripped.includes(kw)) {
             let beforeKw = stripped.substring(0, stripped.indexOf(kw));
             let title = kw;
@@ -3766,6 +3769,8 @@
         if (stripped.length < 6 || stripped.length > 80) continue;
         for (const kw of keywords) {
           if (kw.length > 5 || kw.length < 2) continue; // 只对短关键词做特殊处理
+          // 超短关键词（≤2字）只在前5行匹配，防止正文干扰
+          if (kw.length <= 2 && i >= 5) continue;
           if (stripped.includes(kw)) {
             let beforeKw = stripped.substring(0, stripped.indexOf(kw));
             if (!isMeaningfulPrefix(beforeKw)) continue;
