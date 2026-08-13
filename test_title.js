@@ -8,6 +8,7 @@ function extractTitleFromOCRText(text) {
     '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
     '证券账户业务申请表', '基金账户业务申请表', '账户业务申请表',
     '私募投资基金备案证明', '备案证明', '私募投资基金备案函', '备案函', '基金备案函',
+    '银行账户信息确认函', '托管信息确认函', '账户信息确认函', '信息确认函', '业务确认函', '交易确认函', '确认函',
     '业务确认书', '交易确认书',
     '开户合同', '开户协议', '开户申请书', '交易申请书', '交易协议',
     '托管协议', '托管合同', '顾问协议', '顾问合同', '合伙协议',
@@ -25,7 +26,7 @@ function extractTitleFromOCRText(text) {
     '预警通知', '终止通知', '解除通知', '催收通知', '缴款通知',
     '公函', '律师函', '通知函', '催收函', '邀请函', '催告函', '回复函',
     '答复函', '复函', '工作函', '联系函', '商洽函', '询问函',
-    '告知函', '提示函', '警示函', '监管函', '函件',
+    '告知函', '提示函', '警示函', '监管函', '函件', '函',
     '任命书', '离职证明', '解约函',
     '收入证明', '在职证明', '资格证明', '身份证明', '资质证明', '证明',
     '保密承诺书', '合规承诺书', '交易承诺书', '风险承诺书',
@@ -120,6 +121,7 @@ function extractTitleFromOCRText(text) {
     let stripped = stripLine(lines[i]);
     if (stripped.length < 2 || stripped.length > 80) continue;
     for (const kw of keywords) {
+      if (kw.length <= 2 && i >= 5) continue;
       if (stripped.includes(kw)) {
         let beforeKw = stripped.substring(0, stripped.indexOf(kw));
         let title = kw;
@@ -136,6 +138,7 @@ function extractTitleFromOCRText(text) {
     if (stripped.length < 6 || stripped.length > 80) continue;
     for (const kw of keywords) {
       if (kw.length > 5 || kw.length < 2) continue;
+      if (kw.length <= 2 && i >= 5) continue;
       if (stripped.includes(kw)) {
         let beforeKw = stripped.substring(0, stripped.indexOf(kw));
         if (!isMeaningfulPrefix(beforeKw)) continue;
@@ -271,6 +274,11 @@ const testCases = [
     name: 'Case 10: 2024年度财务审计报告（跨行，带年度年份）',
     ocrText: `华兴会计师事务所（特殊普通合伙）\nHUAXING CERTIFIED PUBLIC ACCOUNTANTS\n2024年度\n财务审计报告\n某某科技股份有限公司\n全体股东：\n我们审计了后附的财务报表...`,
     expect: '2024年度财务审计报告'
+  },
+  {
+    name: 'Case 11: 银行账户信息确认函（正文含"公告"干扰词）',
+    ocrText: `银行账户信息确认函\n尊敬的管理人：\n贵公司管理的"茂源信淮量化选股7号私募证券投资基金"银行\n账户相关信息如下：\n账户户名:中信建投证券股份有限公司茂源信淮量化选股7号\n银行账号:110062159018800358952\n开户行:交通银行北京三里河支行\n大额支付系统号:301100000347\n银行账户开户利率:按0.385%计息。\n注: 计息期若遇银行调整利率, 调整后账户利率以开户银行最新公告为准。\n银证关联需要券商营业部在开立三方账户时直接将上述营业执照号发送银行并预指定\n托管部联系方式: 010-56161929-4tuoguan@csc.com.cn\n中信建投证券股份有限公司托管部\n2021-09-27`,
+    expect: '银行账户信息确认函'
   }
 ];
 
