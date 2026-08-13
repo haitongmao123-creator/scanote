@@ -4086,6 +4086,23 @@
         // 5. 如果都没找到，使用文件名
         let finalTitle = extractedTitle || filenameWithoutExt;
 
+        // 统一清理标题（不管来自文本层还是OCR）
+        function universalCleanTitle(t) {
+          if (!t) return '';
+          // 去掉前缀：备案编码、备案编号、版本号等
+          t = t.replace(/^(?:备案编码|备案编号|版本号|合同编号|协议编号|营业执照号码|编号)[:：]?\s*[A-Za-z0-9]{1,20}\s*/, '');
+          // 去掉备案编码行号前缀残留（如："备案编码SVD248..."）
+          t = t.replace(/^备案编码[A-Za-z0-9]+/, '');
+          // 去掉英文
+          t = t.replace(/[A-Za-z]/g, '');
+          // 去掉6位以上的长数字串
+          t = t.replace(/[A-Fa-f0-9]{6,}/g, '');
+          // 清理空格
+          t = t.replace(/\s+/g, ' ').trim();
+          return t;
+        }
+        finalTitle = universalCleanTitle(finalTitle);
+
         // 清理标题
         finalTitle = finalTitle
           .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s（）【】\-]/g, ' ')
