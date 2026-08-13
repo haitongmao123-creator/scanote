@@ -3596,7 +3596,7 @@
       const rawKeywords = [
         '承诺书和风险提示书', '承诺书和风险揭示书',
         '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
-        '授权委托书', '业务确认书', '交易确认书',
+        '接入外部信息系统', '授权委托书', '业务确认书', '交易确认书',
         '开户合同', '开户协议', '开户申请书', '交易申请书', '交易协议',
         '托管协议', '托管合同', '顾问协议', '顾问合同', '合伙协议',
         '委托协议', '委托合同', '服务协议', '服务合同',
@@ -3621,22 +3621,17 @@
         '意向书', '谅解备忘录', '合作备忘录', '备忘录', '要约',
         '决议', '纪要', '公告', '通报'
       ];
-      // 去重并按长度降序
       const keywords = [...new Set(rawKeywords)].sort((a, b) => b.length - a.length);
 
-      // 按行分割OCR文本
       const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      const searchRange = Math.min(lines.length, 12);
 
-      // 仅在最前8行中找标题（标题一定在页面顶部）
-      const searchRange = Math.min(lines.length, 8);
+      // === 调试：打印前15行，方便排查 ===
+      addDebugInfo('🔍 OCR前15行', lines.slice(0, 15).map((l, i) => `[${i+1}] ${l}`).join(' | '));
 
-      // 遍历前8行，用长关键词优先匹配
-      for (let i = 0; i < searchRange; i++) {
-        const line = lines[i];
-        if (line.length < 2 || line.length > 80) continue;
-
-        // 剥离版本号/编号等前缀，得到"纯文本"
-        let strippedLine = line
+      // 剥离前缀（版本号、编号等）并清理
+      function stripLine(line) {
+        return line
           .replace(/^版本号[:：]?\s*\S+\s*/, '')
           .replace(/^编号[:：]?\s*\S+\s*/, '')
           .replace(/^合同编号[:：]?\s*\S+\s*/, '')
@@ -3644,56 +3639,71 @@
           .replace(/^文号[:：]?\s*\S+\s*/, '')
           .replace(/^[\d\.\s\u3000\u00A0]+/, '')
           .trim();
+      }
 
-        // 如果剥离后没有内容，跳过
-        if (strippedLine.length < 2) continue;
+      // 正文行特征：明显不是标题
+      function isBodyLine(line) {
+        if (/^[一二三四五六七八九十百千]+[、\.]/.test(line)) return true; // "一、二、三、"开头
+        if (/^\(?[（(]?(?:是|否|√|×|X)[）)]?/.test(line)) return true; // "（是）"开头的选择项
+        if (/办理|业务|签约|撤销|账户|资金|客户|证券|期货|基金|代理|本人|机构|身份证/.test(line) && line.length > 20) return true;
+        if (/[。，；、,;:：]/.test(line) && line.length > 30) return true; // 含标点且长
+        if (line.length > 60) return true; // 超长行
+        return false;
+      }
 
-        // 跳过纯日期行
-        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(strippedLine)) continue;
-        if (/^\d+$/.test(strippedLine)) continue;
-        // 跳过含大量正文标点的行
-        if (strippedLine.length > 5 && /[。，；]/.test(strippedLine)) continue;
+      // === 1. 前12行，关键词匹配 ===
+      for (let i = 0; i < searchRange; i++) {
+        let stripped = stripLine(lines[i]);
+        if (stripped.length < 2 || stripped.length > 80) continue;
 
-        // 从长关键词开始匹配（在剥离后的文本中搜索）
         for (const kw of keywords) {
-          if (strippedLine.includes(kw)) {
-            // 截取：关键词之前的内容 + 关键词
-            let title = strippedLine.substring(0, strippedLine.indexOf(kw) + kw.length);
-            // 去掉关键词后面的公司名
+          if (stripped.includes(kw)) {
+            let title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
             title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
-            // 去掉末尾冒号/日期
             title = title.replace(/[：:]\s*$/, '');
             title = title.replace(/\d{4}年\d{1,2}月\d{1,2}日?$/, '');
-            // 去掉中文间空格
             title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
             title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
             if (title.length >= 2) {
+              addDebugInfo('✅ 关键词匹配', `行${i+1}: "${lines[i].slice(0,30)}" → kw=${kw} → title=${title}`);
               return title.trim();
             }
-            // 兜底：直接返回关键词
+            addDebugInfo('✅ 关键词匹配(兜底)', kw);
             return kw;
           }
         }
       }
 
-      // 回退：从前8行取最长的有效行作为标题
+      // === 2. 回退：从前12行中选最像标题的一行 ===
       let bestLine = '';
+      let bestScore = -1;
       for (let i = 0; i < searchRange; i++) {
-        let line = lines[i];
-        // 同样剥离前缀
-        line = line.replace(/^版本号[:：]?\s*\S+\s*/, '')
-          .replace(/^编号[:：]?\s*\S+\s*/, '')
-          .replace(/^[\d\.\s\u3000\u00A0]+/, '').trim();
-        if (line.length < 2 || line.length > 60) continue;
-        if (/^\d{4}[\-/]\d{1,2}[\-/]\d{1,2}$/.test(line)) continue;
-        if (/[。，；]/.test(line) && line.length > 20) continue;
-        if (line.length > bestLine.length) {
-          bestLine = line;
+        let stripped = stripLine(lines[i]);
+        if (stripped.length < 2) continue;
+        if (isBodyLine(stripped)) continue;
+
+        // 评分：长度适中（15-40字最佳）、无标点、含标题常见词加分
+        let score = 0;
+        if (stripped.length >= 4 && stripped.length <= 50) score += 50;
+        if (stripped.length >= 10 && stripped.length <= 40) score += 20;
+        if (!/[。，；、,;]/.test(stripped)) score += 20;
+        if (/[书|表|告|函|知|议|明|同|托|诺|明|书|证|约|定]/.test(stripped)) score += 30; // 标题后缀字
+        // 行越靠前分数越高（标题一般在前面）
+        score += Math.max(0, 10 - i);
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestLine = stripped;
         }
       }
-      if (bestLine) return bestLine;
 
-      // 最终回退：第一行
+      if (bestLine) {
+        bestLine = bestLine.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+        addDebugInfo('🎯 回退选中行', bestLine + ` (score=${bestScore})`);
+        return bestLine.trim();
+      }
+
+      // === 3. 最终回退 ===
       for (const line of lines) {
         if (line.length > 2 && line.length < 80) return line;
       }
