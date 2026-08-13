@@ -3596,7 +3596,7 @@
       const rawKeywords = [
         '承诺书和风险提示书', '承诺书和风险揭示书',
         '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
-        '接入外部信息系统', '授权委托书', '业务确认书', '交易确认书',
+        '业务确认书', '交易确认书',
         '开户合同', '开户协议', '开户申请书', '交易申请书', '交易协议',
         '托管协议', '托管合同', '顾问协议', '顾问合同', '合伙协议',
         '委托协议', '委托合同', '服务协议', '服务合同',
@@ -3665,11 +3665,31 @@
             title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
             title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
             if (title.length >= 2) {
-              addDebugInfo('✅ 关键词匹配', `行${i+1}: "${lines[i].slice(0,30)}" → kw=${kw} → title=${title}`);
+              addDebugInfo('✅ 单行业务匹配', `行${i+1} → kw=${kw} → ${title}`);
               return title.trim();
             }
-            addDebugInfo('✅ 关键词匹配(兜底)', kw);
+            addDebugInfo('✅ 单行兜底匹配', kw);
             return kw;
+          }
+        }
+      }
+
+      // === 1.5 跨两行合并匹配（OCR可能把标题拆成两行）===
+      for (let i = 0; i < searchRange - 1; i++) {
+        let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+        if (combined.length < 4 || combined.length > 120) continue;
+
+        for (const kw of keywords) {
+          if (kw.length < 5) continue; // 只匹配较长关键词
+          if (combined.includes(kw)) {
+            let title = combined.substring(0, combined.indexOf(kw) + kw.length);
+            title = title.replace(/[\u4e00-\u9fa5]+(?:有限)?(?:股份)?(?:合伙)?(?:集团)?(?:公司|企业)$/, '');
+            title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+            title = title.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+            if (title.length >= 3) {
+              addDebugInfo('✅ 跨行匹配', `行${i+1}+${i+2} → kw=${kw} → ${title}`);
+              return title.trim();
+            }
           }
         }
       }
