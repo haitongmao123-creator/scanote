@@ -3469,9 +3469,14 @@
     });
 
     // Extract raw text from PDF (with font size info)
+    // PDF文本层提取 - 只识别第一页，返回textBlocks数组（带Y坐标和字号）
     async function extractRawTextFromPDF(typedarray, includeFontInfo = false) {
       try {
-        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+        // 关键保险：调用前再复制一份，防止上层传入的typedarray已经被pdfjs/Tesseract detach
+        const safeData = typedarray instanceof Uint8Array
+          ? new Uint8Array(typedarray.buffer.slice(typedarray.byteOffset, typedarray.byteOffset + typedarray.byteLength))
+          : new Uint8Array(typedarray.slice(0));
+        const pdf = await pdfjsLib.getDocument(safeData).promise;
         
         if (includeFontInfo) {
           // Return text with font size info for better title detection
@@ -3533,7 +3538,11 @@
     // OCR识别（扫描型PDF）- 仅识别上半部分提升速度
     async function performOCR(typedarray) {
       try {
-        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+        // 关键保险：复制独立副本，Tesseract Worker postMessage会用Transferable detach传入的buffer
+        const safeData = typedarray instanceof Uint8Array
+          ? new Uint8Array(typedarray.buffer.slice(typedarray.byteOffset, typedarray.byteOffset + typedarray.byteLength))
+          : new Uint8Array(typedarray.slice(0));
+        const pdf = await pdfjsLib.getDocument(safeData).promise;
         const page = await pdf.getPage(1);
 
         const scale = 1.5;
@@ -3881,7 +3890,10 @@
         let pdfTextLines = '';
         let textBlocksCount = 0;
         try {
-          const result = await extractRawTextFromPDF(typedarray, true);
+          const result = await extractRawTextFromPDF(
+            new Uint8Array(typedarray.buffer.slice(typedarray.byteOffset, typedarray.byteOffset + typedarray.byteLength)),
+            true
+          );
           if (result.textBlocks && result.textBlocks.length > 0) {
             textBlocksCount = result.textBlocks.length;
             // 把文本块按Y升序排列（越靠上越先），每行换行输出
@@ -3915,7 +3927,11 @@
         if (textBlocksCount === 0 || !pdfTextLines || pdfTextLines.trim().length === 0) {
           addDebugInfo('🔎 检测到扫描型PDF', '文字层为空，启动本地OCR识别');
           try {
-            ocrText = await performOCR(typedarray);
+            // 关键：给performOCR传独立副本（防止extractRawTextFromPDF已detach底层buffer）
+            const ocrBufferCopy = new Uint8Array(
+              typedarray.buffer.slice(typedarray.byteOffset, typedarray.byteOffset + typedarray.byteLength)
+            );
+            ocrText = await performOCR(ocrBufferCopy);
             if (ocrText) {
               addDebugInfo('📝 OCR文本', ocrText.slice(0, 300));
             }
