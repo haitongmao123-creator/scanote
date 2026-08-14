@@ -4428,6 +4428,7 @@
         '申请表', '申请单', '登记表', '审批表', '审核表', '报名表', '调查表', '汇总表',
         '持有人名册', '持有人份额明细表', '份额明细', '持有人份额',
         '托管账户信息确认函', '托管账户开户通知单', '托管资金专门账户信息确认函',
+        '托管资产专用银行账户变更确认书',
         '基金产品合同', '产品合同', '基金合同', '产品协议', '信托合同', '资管合同',
         '协议', '合同', '契约', '协议书',
         '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
@@ -4449,6 +4450,20 @@
         '意向书', '谅解备忘录', '合作备忘录', '备忘录', '要约',
         '决议', '纪要', '公告', '通报', '通知', '报告'
     ];
+
+    // 金融复合标题前缀识别（通用方案）：识别"托管资产专用银行账户变更"这类
+    // 由金融术语组成的复合标题前缀，避免被当垃圾前缀截断
+    function isFinancialCompoundPrefix(p) {
+      if (!p) return false;
+      // 清理开头的附件标记(附X)、序号等
+      const cleaned = p.replace(/^附\d+[\.、\s]*/, '').replace(/^\d+[\.、\s]*/, '').trim();
+      if (cleaned.length < 4 || cleaned.length > 30) return false;
+      // 主体须为中文（中文占比>=60%）
+      const cn = (cleaned.match(/[\u4e00-\u9fa5]/g) || []).length;
+      if (cn / cleaned.length < 0.6) return false;
+      // 含金融领域术语 → 视为有意义的复合标题前缀
+      return /(托管|资产|资金|银行|账户|变更|开户|销户|专用|专门|结算|交收|清算|份额|持有人|登记|备案|对账|核对|转换|转让|过户|注销|撤销|募集|赎回|申购|认购|估值|净值)/.test(cleaned);
+    }
 
     // 从OCR文本中提取标题
     function extractTitleFromOCRText(text) {
@@ -4477,6 +4492,8 @@
           .replace(/^机构代码[:：]?\s*\S+\s*/, '')
           // 只去掉"数字+标点"格式的编号前缀（如"1. "、"1、"、"(1)"），保留年份如"2024年度"
           .replace(/^\d+[\.、\)\]\s\u3000]+/, '')
+          // 去掉附件标记前缀（如"附9"、"附1、"）
+          .replace(/^附\d+[\.、\s]*/, '')
           .replace(/^[\(\（]\d+[\)\）]\s*/, '')
           .replace(/^[\s\u3000]+/, '')
           .trim();
@@ -4516,6 +4533,8 @@
         if (/[:：]/.test(p)) return false;
         // 产品名特征（私募基金/证券投资基金/信托计划/资管计划等产品全称）→ 有意义，保留前缀
         if (/(私募|证券投资基金|集合资金信托|信托计划|资产管理计划|资管计划|私募基金|投资基金)/.test(p) && p.length >= 4 && p.length <= 40) return true;
+        // 金融复合标题前缀（托管资产专用银行账户变更等术语组合）→ 有意义，保留前缀
+        if (isFinancialCompoundPrefix(p)) return true;
         const hasYearDocNo = /\d{4}年/.test(p) || /\d{4}年度$/.test(p) || /第[一二三四五六七八九十百千0-9]+号/.test(p);
         // 长前缀(>15字)：仅含年份/文号的正式公文才保留，否则视为过长修饰
         if (p.length > 15) return hasYearDocNo && /^关于/.test(p) && /的$/.test(p);
@@ -4809,7 +4828,9 @@
               // 产品名特征（私募/证券投资基金/信托计划/资管计划等产品全称）→ 有意义，保留前缀
               const hasProductName = prefixUpToKw.length >= 4 && prefixUpToKw.length <= 40 &&
                 /(私募|证券投资基金|集合资金信托|信托计划|资产管理计划|资管计划|私募基金|投资基金)/.test(prefixUpToKw);
-              const meaningfulBefore = hasProductName ||
+              // 金融复合标题前缀（托管资产专用银行账户变更等术语组合）→ 有意义，保留前缀
+              const hasFinancialPrefix = isFinancialCompoundPrefix(prefixUpToKw);
+              const meaningfulBefore = hasProductName || hasFinancialPrefix ||
                 ((/^关于.+的$/.test(prefixUpToKw) ||
                 /第[一二三四五六七八九十百千0-9]+号/.test(prefixUpToKw) ||
                 /\d{4}年/.test(prefixUpToKw) ||
