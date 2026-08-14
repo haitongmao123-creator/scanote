@@ -3535,28 +3535,40 @@
       }
     }
 
-    // 全局OCR Worker（复用，避免每次识别都重新加载语言数据）
-    let _ocrWorker = null;
-    let _ocrWorkerPromise = null;
+    // 全局OCR Worker池（2个Worker并行，提升多文件处理速度）
+    const _ocrWorkers = [];
+    let _ocrWorkerInitPromise = null;
+    const _workerQueue = [];
 
-    async function getOCRWorker() {
-      if (_ocrWorker) return _ocrWorker;
-      if (_ocrWorkerPromise) return _ocrWorkerPromise;
-      _ocrWorkerPromise = (async () => {
-        addDebugInfo('🔧 初始化OCR引擎', '加载中文语言数据（仅首次，后续复用）...');
-        const w = await Tesseract.createWorker(['chi_sim', 'eng'], 1, {
-          logger: m => {
-            if (m.status === 'recognizing text') {
-              const pct = Math.round(m.progress * 100);
-              addDebugInfo('⏳ OCR识别中', pct + '%');
-            }
-          }
-        });
-        _ocrWorker = w;
-        _ocrWorkerPromise = null;
-        return w;
+    async function initOCRWorkers() {
+      if (_ocrWorkers.length >= 2) return;
+      if (_ocrWorkerInitPromise) return _ocrWorkerInitPromise;
+      _ocrWorkerInitPromise = (async () => {
+        addDebugInfo('🔧 初始化OCR引擎', '加载中文语言数据（2个Worker并行）...');
+        const promises = [];
+        for (let i = 0; i < 2; i++) {
+          promises.push(Tesseract.createWorker(['chi_sim', 'eng'], 2));
+        }
+        const workers = await Promise.all(promises);
+        for (const w of workers) {
+          _workerQueue.push(w);
+          _ocrWorkers.push(w);
+        }
+        addDebugInfo('✅ OCR引擎就绪', `Worker数量: ${_ocrWorkers.length}`);
+        _ocrWorkerInitPromise = null;
       })();
-      return _ocrWorkerPromise;
+      return _ocrWorkerInitPromise;
+    }
+
+    // 从Worker池获取一个空闲Worker
+    async function getOCRWorker() {
+      await initOCRWorkers();
+      return _workerQueue.shift();
+    }
+
+    // 归还Worker到池子
+    function releaseOCRWorker(worker) {
+      if (worker) _workerQueue.push(worker);
     }
 
     // OCR识别（扫描型PDF）- 仅识别上半部分提升速度
@@ -3569,11 +3581,11 @@
         const pdf = await pdfjsLib.getDocument(safeData).promise;
         const page = await pdf.getPage(1);
 
-        const scale = 1.2;
+        const scale = 1.0;
         const viewport = page.getViewport({ scale });
         const fullHeight = viewport.height;
-        // 只识别上方部分（前40%高度），标题一定在顶部
-        const cropHeight = Math.floor(fullHeight * 0.40);
+        // 只识别上方部分（前30%高度），标题一定在顶部
+        const cropHeight = Math.floor(fullHeight * 0.30);
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -3591,9 +3603,14 @@
 
         addDebugInfo('🔍 启动本地OCR', '识别第1页上半部分...');
 
-        // 复用全局Worker，不每次创建/销毁
+        // 从Worker池获取，用完归还
         const worker = await getOCRWorker();
-        const result = await worker.recognize(canvas);
+        let result;
+        try {
+          result = await worker.recognize(canvas);
+        } finally {
+          releaseOCRWorker(worker);
+        }
 
         let pageText = result.data.text || '';
         pageText = pageText.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
@@ -4266,7 +4283,6 @@
       console.log('[识笺] 文件列表已渲染');
 
       try {
-        clearDebugInfo();
         addDebugInfo('🎯 开始处理', file.name);
         addDebugInfo('📄 文件类型', isWord ? 'Word文档' : (isPDF ? 'PDF文档' : '其他文档'));
 
@@ -4472,18 +4488,30 @@
       URL.revokeObjectURL(a.href);
     }
 
-    // Batch process files sequentially
+    // Batch process files concurrently (并发3个，OCR Worker池并行识别)
     async function processBatchFiles(files) {
       if (files.length === 0) return;
-      showToast(`开始处理 ${files.length} 个文件`, 'info');
+      showToast(`开始处理 ${files.length} 个文件（并发3路）`, 'info');
+      clearDebugInfo();
 
-      for (const file of files) {
-        try {
-          await processFile(file);
-        } catch (err) {
-          console.error('处理文件失败:', file.name, err);
+      const CONCURRENCY = 3;
+      const results = [];
+      let index = 0;
+
+      async function processNext() {
+        while (index < files.length) {
+          const currentIndex = index++;
+          try {
+            await processFile(files[currentIndex]);
+            results.push(currentIndex);
+          } catch (err) {
+            console.error('处理文件失败:', files[currentIndex].name, err);
+          }
         }
       }
+
+      const workers = Array.from({ length: Math.min(CONCURRENCY, files.length) }, () => processNext());
+      await Promise.all(workers);
 
       const successCount = state.files.filter(f => f.status === 'success').length;
       showToast(`处理完成：${successCount}/${files.length} 个成功`, 'success');
