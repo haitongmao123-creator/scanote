@@ -536,6 +536,16 @@
       color: var(--text-secondary);
     }
 
+    .drop-zone .multi-hint {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--accent);
+      background: var(--accent-light);
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+    }
+
     /* File List */
     .file-list {
       margin-top: 12px;
@@ -2908,6 +2918,7 @@
         </svg>
         <h3>拖拽PDF/Word文件到此处</h3>
         <p>或点击选择文件</p>
+        <span class="multi-hint">支持多文件同时识别</span>
         <input type="file" class="hidden-input" id="file-input" accept=".pdf,.doc,.docx" multiple="">
       </div>
 
