@@ -2944,7 +2944,7 @@
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
             <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
           </svg>
-          复制全部文件
+          复制全部名称
         </button>
         <button class="batch-btn" id="btn-clear-all">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -4408,44 +4408,29 @@
       showToast(`已下载 ${completed.length} 个文件`, 'success');
     }
 
-    // Copy all files to clipboard
+    // Copy all file names to clipboard
     async function copyAllFiles() {
-      const completed = state.files.filter(f => f.status === 'success' && f.blob);
+      const completed = state.files.filter(f => f.status === 'success');
       if (completed.length === 0) {
         showToast('没有已完成的文件', 'info');
         return;
       }
 
-      showToast(`正在复制 ${completed.length} 个文件到剪贴板...`, 'info');
-
+      const names = completed.map(f => f.newName).join('\n');
       try {
-        // Try ClipboardItem API (Chrome/Edge 86+)
-        const clipboardItems = [];
-        for (const f of completed) {
-          const mimeType = f.blob.type || 'application/octet-stream';
-          // ClipboardItem only accepts specific MIME types, use image/png for images, otherwise try the actual type
-          try {
-            clipboardItems.push(new ClipboardItem({ [mimeType]: f.blob }));
-          } catch (e) {
-            // Fallback: wrap as generic blob
-            const wrappedBlob = new Blob([await f.blob.arrayBuffer()], { type: mimeType });
-            clipboardItems.push(new ClipboardItem({ [mimeType]: wrappedBlob }));
-          }
-        }
-
-        await navigator.clipboard.write(clipboardItems);
-        showToast(`已复制 ${completed.length} 个文件到剪贴板`, 'success');
+        await navigator.clipboard.writeText(names);
+        showToast(`已复制 ${completed.length} 个文件名到剪贴板`, 'success');
       } catch (err) {
-        // Fallback: download files individually if clipboard copy fails
-        console.error('Clipboard copy failed:', err);
-        showToast('浏览器不支持复制文件，改为逐个下载...', 'info');
-        for (let i = 0; i < completed.length; i++) {
-          downloadFile(completed[i]);
-          if (i < completed.length - 1) {
-            await new Promise(r => setTimeout(r, 300));
-          }
-        }
-        showToast(`已下载 ${completed.length} 个文件`, 'success');
+        // Fallback: use textarea + execCommand
+        const ta = document.createElement('textarea');
+        ta.value = names;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast(`已复制 ${completed.length} 个文件名到剪贴板`, 'success');
       }
     }
 
