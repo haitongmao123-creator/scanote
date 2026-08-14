@@ -4681,17 +4681,25 @@
     // 从OCR文本中提取备案编码（格式：6位字母+数字，如SVD248）
     function extractFilingCode(text) {
       if (!text) return '';
-      // 匹配"备案编码"后面的6位字母数字组合
-      const patterns = [
-        /备案编码[:：]?\s*([A-Za-z0-9]{6})/,
-        /备案编号[:：]?\s*([A-Za-z0-9]{6})/,
-        /备案代码[:：]?\s*([A-Za-z0-9]{6})/,
+      // OCR常把"备案编码"误识别为"备案纺码/备案妨码/备案妨编"等，用模糊匹配容错
+      // "备案" + 1字(编/纺/妨/纷) + 1字(码/玛/马) 后的6位字母数字组合
+      const labelPattern = /备案[编纺妨纷][码玛马]/;
+      // 直接匹配"备案编码/备案编号/备案代码"（精确，优先）
+      const exactPatterns = [
+        /备案编码[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6})/,
+        /备案编号[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6})/,
+        /备案代码[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6})/,
       ];
-      for (const p of patterns) {
+      for (const p of exactPatterns) {
         const m = text.match(p);
-        if (m && m[1]) {
-          return m[1].toUpperCase();
-        }
+        if (m && m[1]) return m[1].toUpperCase();
+      }
+      // 模糊匹配（OCR误识别容错）
+      const m = text.match(labelPattern);
+      if (m) {
+        const after = text.substring(m.index + m[0].length);
+        const cm = after.match(/[，,\.。\s]*([A-Za-z0-9]{6})/);
+        if (cm && cm[1]) return cm[1].toUpperCase();
       }
       return '';
     }
