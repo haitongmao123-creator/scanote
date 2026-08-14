@@ -4429,6 +4429,7 @@
         '持有人名册', '持有人份额明细表', '份额明细', '持有人份额',
         '托管账户信息确认函', '托管账户开户通知单', '托管资金专门账户信息确认函',
         '托管资产专用银行账户变更确认书',
+        '账户开立回执', '期货开户回执单', '期货开户回执',
         '基金产品合同', '产品合同', '基金合同', '产品协议', '信托合同', '资管合同',
         '协议', '合同', '契约', '协议书',
         '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
@@ -4704,6 +4705,26 @@
       return '';
     }
 
+    // 从OCR文本中提取期货资金账号/期货账号（纯数字，通常6-12位）
+    function extractFuturesAccount(text) {
+      if (!text) return '';
+      // OCR可能将"期货资金账号"误识别为"期货资金帐号"等，兼容"帐/账"
+      // 标签后可能有：空格、冒号、逗号等，然后是纯数字账号
+      const patterns = [
+        /期货资金账[号码][:：]?\s*[，,\.。\s]*(\d{6,12})/,
+        /期货资金帐[号码][:：]?\s*[，,\.。\s]*(\d{6,12})/,
+        /期货账[号码][:：]?\s*[，,\.。\s]*(\d{6,12})/,
+        /期货帐[号码][:：]?\s*[，,\.。\s]*(\d{6,12})/,
+        /资金账[号码][:：]?\s*[，,\.。\s]*(\d{6,12})/,
+        /资金帐[号码][:：]?\s*[，,\.。\s]*(\d{6,12})/,
+      ];
+      for (const p of patterns) {
+        const m = text.match(p);
+        if (m && m[1]) return m[1];
+      }
+      return '';
+    }
+
     // PDF Text Extraction (Local Mode) - Improved!
     async function extractTextFromPDF(file) {
       try {
@@ -4877,6 +4898,12 @@
         if (filingCode) {
           finalTitle = finalTitle + filingCode;
           addDebugInfo('📋 备案编码', filingCode);
+        }
+        // 追加期货资金账号/期货账号
+        const futuresAccount = extractFuturesAccount(textForCode);
+        if (futuresAccount) {
+          finalTitle = finalTitle + futuresAccount;
+          addDebugInfo('🔢 期货账号', futuresAccount);
         }
         
         addDebugInfo('🏷️ 最终标题', finalTitle);
