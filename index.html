@@ -3063,6 +3063,22 @@
           </div>
         </div>
 
+        <!-- 自定义关键词 -->
+        <div style="margin-top: 16px; padding: 12px; background: #F5F5F5; border-radius: 8px;">
+          <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>
+            自定义关键词
+          </div>
+          <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+            添加识别不到的文件类型关键词，例如"说明书""登记表"。保存后自动参与标题匹配
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="custom-keyword-input" placeholder="输入关键词后回车，如：说明书" style="flex:1; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;">
+            <button class="btn btn-secondary" id="add-custom-keyword" style="padding: 6px 12px; white-space: nowrap;">添加</button>
+          </div>
+          <div id="custom-keyword-list" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;"></div>
+        </div>
+
         <div class="preview-box">
           <div class="preview-label">预览文件名</div>
           <div class="preview-filename" id="filename-preview">扫描件_文档标题_20250605.pdf</div>
@@ -3124,7 +3140,8 @@
           title: { enabled: true },
           date: { enabled: true }
         },
-        savePath: '浏览器下载文件夹'
+        savePath: '浏览器下载文件夹',
+        customKeywords: []
       }
     };
 
@@ -3254,6 +3271,11 @@
           });
 
           updateFilenamePreview();
+
+          // 恢复自定义关键词
+          if (state.config.customKeywords) {
+            renderCustomKeywords();
+          }
         } catch (e) {
           console.error('Failed to load config:', e);
         }
@@ -3479,6 +3501,59 @@
       showToast('所有配置已保存', 'success');
     });
 
+    // === 自定义关键词管理 ===
+    function renderCustomKeywords() {
+      const container = $('custom-keyword-list');
+      if (!container) return;
+      const keywords = state.config.customKeywords || [];
+      if (keywords.length === 0) {
+        container.innerHTML = '';
+        return;
+      }
+      container.innerHTML = keywords.map((kw, i) => `
+        <span style="display:inline-flex; align-items:center; gap:4px; padding:4px 8px; background:#E3F2FD; border:1px solid #90CAF9; border-radius:12px; font-size:12px; color:#1565C0;">
+          ${kw}
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="cursor:pointer;" onclick="removeCustomKeyword(${i})">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </span>
+      `).join('');
+    }
+
+    function addCustomKeyword() {
+      const input = $('custom-keyword-input');
+      const kw = input.value.trim();
+      if (!kw) return;
+      if (kw.length > 30) {
+        showToast('关键词过长（最多30字）', 'info');
+        return;
+      }
+      if (!state.config.customKeywords) state.config.customKeywords = [];
+      if (state.config.customKeywords.includes(kw)) {
+        showToast('该关键词已存在', 'info');
+        return;
+      }
+      state.config.customKeywords.push(kw);
+      saveConfig();
+      renderCustomKeywords();
+      input.value = '';
+      showToast(`已添加关键词"${kw}"`, 'success');
+    }
+
+    window.removeCustomKeyword = function(index) {
+      const kw = state.config.customKeywords[index];
+      state.config.customKeywords.splice(index, 1);
+      saveConfig();
+      renderCustomKeywords();
+      showToast(`已删除关键词"${kw}"`, 'info');
+    };
+
+    $('add-custom-keyword').addEventListener('click', addCustomKeyword);
+    $('custom-keyword-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addCustomKeyword(); }
+    });
+
     // Extract raw text from PDF (with font size info)
     // PDF文本层提取 - 只识别第一页，返回textBlocks数组（带Y坐标和字号）
     async function extractRawTextFromPDF(typedarray, includeFontInfo = false) {
@@ -3698,7 +3773,9 @@
         '意向书', '谅解备忘录', '合作备忘录', '备忘录', '要约',
         '决议', '纪要', '公告', '通报', '通知', '报告'
       ];
-      const keywords = [...new Set(rawKeywords)].sort((a, b) => b.length - a.length);
+      // 合并内置关键词和用户自定义关键词
+      const allRaw = [...rawKeywords, ...(state.config.customKeywords || [])];
+      const keywords = [...new Set(allRaw)].sort((a, b) => b.length - a.length);
 
       const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
       const searchRange = Math.min(lines.length, 15);
