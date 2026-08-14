@@ -3535,35 +3535,54 @@
       }
     }
 
-    // 全局OCR Worker池（2个Worker并行，提升多文件处理速度）
+    // 全局OCR Worker池（1个主Worker立即就绪，第2个后台懒加载）
     const _ocrWorkers = [];
-    let _ocrWorkerInitPromise = null;
     const _workerQueue = [];
+    let _mainWorkerPromise = null;
+    let _secondWorkerPromise = null;
 
-    async function initOCRWorkers() {
-      if (_ocrWorkers.length >= 2) return;
-      if (_ocrWorkerInitPromise) return _ocrWorkerInitPromise;
-      _ocrWorkerInitPromise = (async () => {
-        addDebugInfo('🔧 初始化OCR引擎', '加载中文语言数据（2个Worker并行）...');
-        const promises = [];
-        for (let i = 0; i < 2; i++) {
-          promises.push(Tesseract.createWorker(['chi_sim', 'eng'], 2));
+    // 立即初始化第1个Worker（阻塞等待，确保立即可用）
+    async function initMainOCRWorker() {
+      if (_workerQueue.length > 0 || _ocrWorkers.length >= 1) {
+        if (_workerQueue.length > 0) return;
+      }
+      if (_mainWorkerPromise) return _mainWorkerPromise;
+      _mainWorkerPromise = (async () => {
+        addDebugInfo('🔧 初始化OCR引擎', '加载中文语言数据...');
+        const w = await Tesseract.createWorker(['chi_sim', 'eng'], 1);
+        _workerQueue.push(w);
+        _ocrWorkers.push(w);
+        addDebugInfo('✅ OCR引擎就绪', 'Worker: 1/2');
+        _mainWorkerPromise = null;
+        // 后台懒加载第2个Worker（不阻塞当前文件）
+        if (!_secondWorkerPromise && _ocrWorkers.length < 2) {
+          _secondWorkerPromise = Tesseract.createWorker(['chi_sim', 'eng'], 1).then(w => {
+            _workerQueue.push(w);
+            _ocrWorkers.push(w);
+            addDebugInfo('✅ OCR引擎扩容', 'Worker: 2/2');
+            _secondWorkerPromise = null;
+          }).catch(() => { _secondWorkerPromise = null; });
         }
-        const workers = await Promise.all(promises);
-        for (const w of workers) {
-          _workerQueue.push(w);
-          _ocrWorkers.push(w);
-        }
-        addDebugInfo('✅ OCR引擎就绪', `Worker数量: ${_ocrWorkers.length}`);
-        _ocrWorkerInitPromise = null;
       })();
-      return _ocrWorkerInitPromise;
+      return _mainWorkerPromise;
     }
 
-    // 从Worker池获取一个空闲Worker
+    // 从Worker池获取一个空闲Worker（没有空闲就等第一个）
     async function getOCRWorker() {
-      await initOCRWorkers();
-      return _workerQueue.shift();
+      await initMainOCRWorker();
+      // 有空闲Worker直接用
+      if (_workerQueue.length > 0) {
+        return _workerQueue.shift();
+      }
+      // 没有空闲，等待任意一个归还
+      return new Promise(resolve => {
+        const check = setInterval(() => {
+          if (_workerQueue.length > 0) {
+            clearInterval(check);
+            resolve(_workerQueue.shift());
+          }
+        }, 50);
+      });
     }
 
     // 归还Worker到池子
