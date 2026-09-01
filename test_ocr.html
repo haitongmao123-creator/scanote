@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>OCR Test</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+<h2>OCR Debug Test</h2>
+<pre id="log"></pre>
+<canvas id="testCanvas" width="400" height="100" style="border:1px solid #ccc"></canvas>
+<br>
+<button onclick="testDirectOCR()">Test 1: Direct canvas OCR</button>
+<button onclick="testCropOCR()">Test 2: cropTopCanvas OCR</button>
+<button onclick="testRotateOCR()">Test 3: rotateCanvas OCR</button>
+<button onclick="testFullFlow()">Test 4: Full performOCR flow (needs PDF)</button>
+<input type="file" id="pdfInput" accept=".pdf">
+<script>
+const logEl = document.getElementById('log');
+function log(msg) {
+  logEl.textContent += msg + '\n';
+  console.log(msg);
+}
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// Draw test text on canvas
+const tc = document.getElementById('testCanvas');
+const tctx = tc.getContext('2d');
+tctx.fillStyle = 'white';
+tctx.fillRect(0, 0, 400, 100);
+tctx.fillStyle = 'black';
+tctx.font = '24px sans-serif';
+tctx.fillText('银行账户开户申请书', 20, 50);
+
+// cropTopCanvas (same as index.html)
+function cropTopCanvas(srcCanvas, ratio) {
+  const h = Math.max(1, Math.floor(srcCanvas.height * ratio));
+  const out = document.createElement('canvas');
+  out.width = srcCanvas.width;
+  out.height = h;
+  const c = out.getContext('2d');
+  c.drawImage(srcCanvas, 0, 0, srcCanvas.width, h, 0, 0, srcCanvas.width, h);
+  return out;
+}
+
+// rotateCanvas (same as index.html)
+function rotateCanvas(srcCanvas, degrees) {
+  const swap = (degrees === 90 || degrees === 270);
+  const w = swap ? srcCanvas.height : srcCanvas.width;
+  const h = swap ? srcCanvas.width : srcCanvas.height;
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const c = out.getContext('2d');
+  c.translate(w / 2, h / 2);
+  c.rotate((degrees * Math.PI) / 180);
+  c.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
+  return out;
+}
+
+async function testDirectOCR() {
+  logEl.textContent = '';
+  log('=== Test 1: Direct canvas OCR ===');
+  try {
+    log('Creating Tesseract worker...');
+    const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1);
+    log('Worker created. Recognizing...');
+    const r = await worker.recognize(tc);
+    log('Result: ' + JSON.stringify(r.data.text));
+    await worker.terminate();
+  } catch(e) {
+    log('ERROR: ' + e.message);
+    log(e.stack);
+  }
+}
+
+async function testCropOCR() {
+  logEl.textContent = '';
+  log('=== Test 2: cropTopCanvas OCR ===');
+  try {
+    const cropped = cropTopCanvas(tc, 0.5);
+    log('Cropped canvas: ' + cropped.width + 'x' + cropped.height);
+    log('Creating Tesseract worker...');
+    const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1);
+    log('Worker created. Recognizing...');
+    const r = await worker.recognize(cropped);
+    log('Result: ' + JSON.stringify(r.data.text));
+    await worker.terminate();
+  } catch(e) {
+    log('ERROR: ' + e.message);
+    log(e.stack);
+  }
+}
+
+async function testRotateOCR() {
+  logEl.textContent = '';
+  log('=== Test 3: rotateCanvas OCR ===');
+  try {
+    const rotated = rotateCanvas(tc, 90);
+    log('Rotated canvas: ' + rotated.width + 'x' + rotated.height);
+    const cropped = cropTopCanvas(rotated, 0.5);
+    log('Cropped rotated: ' + cropped.width + 'x' + cropped.height);
+    log('Creating Tesseract worker...');
+    const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1);
+    log('Worker created. Recognizing...');
+    const r = await worker.recognize(cropped);
+    log('Result: ' + JSON.stringify(r.data.text));
+    await worker.terminate();
+  } catch(e) {
+    log('ERROR: ' + e.message);
+    log(e.stack);
+  }
+}
+
+async function testFullFlow() {
+  logEl.textContent = '';
+  log('=== Test 4: Full performOCR flow ===');
+  const file = document.getElementById('pdfInput').files[0];
+  if (!file) {
+    log('Please select a PDF file first');
+    return;
+  }
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const typedarray = new Uint8Array(arrayBuffer.slice(0));
+    log('PDF loaded, size: ' + typedarray.byteLength);
+
+    const pdf = await pdfjsLib.getDocument(typedarray).promise;
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 1.0 });
+    log('Page 1 size: ' + viewport.width + 'x' + viewport.height);
+
+    // Render full page
+    const fullCanvas = document.createElement('canvas');
+    const fullCtx = fullCanvas.getContext('2d');
+    fullCanvas.width = viewport.width;
+    fullCanvas.height = viewport.height;
+    await page.render({
+      canvasContext: fullCtx,
+      viewport: viewport
+    }).promise;
+    log('Full page rendered: ' + fullCanvas.width + 'x' + fullCanvas.height);
+
+    // Crop top 30%
+    const cropped = cropTopCanvas(fullCanvas, 0.30);
+    log('Cropped: ' + cropped.width + 'x' + cropped.height);
+
+    // OCR
+    log('Creating Tesseract worker...');
+    const worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1);
+    log('Worker created. Recognizing cropped canvas...');
+    const r = await worker.recognize(cropped);
+    log('OCR Result (0°): ' + JSON.stringify(r.data.text?.slice(0, 200)));
+
+    // Try rotation
+    const rotated = rotateCanvas(fullCanvas, 90);
+    const rotatedCropped = cropTopCanvas(rotated, 0.40);
+    log('Rotated+cropped: ' + rotatedCropped.width + 'x' + rotatedCropped.height);
+    log('Recognizing rotated canvas...');
+    const r2 = await worker.recognize(rotatedCropped);
+    log('OCR Result (90°): ' + JSON.stringify(r2.data.text?.slice(0, 200)));
+
+    await worker.terminate();
+    log('Done!');
+  } catch(e) {
+    log('ERROR: ' + e.message);
+    log(e.stack);
+  }
+}
+</script>
+</body>
+</html>
