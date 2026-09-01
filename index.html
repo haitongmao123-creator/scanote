@@ -4380,13 +4380,26 @@
     }
 
     // 评估OCR文本质量得分：中文汉字数 + 命中关键词加权（用于判断方向是否正确）
+    // 引入CJK密度检测：横向/旋转扫描件在错误方向下会输出大量ASCII乱码夹杂少量随机汉字，
+    // 需通过CJK密度区分正确方向与错误方向
     function scoreOCRText(text) {
       if (!text) return 0;
       const cjk = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+      const totalNonSpace = text.replace(/\s/g, '').length;
+      const cjkRatio = totalNonSpace > 0 ? cjk / totalNonSpace : 0;
       let kwScore = 0;
+      let longKwScore = 0;
       const kws = [...TITLE_KEYWORDS, ...(state.config.customKeywords || [])];
       for (const kw of kws) {
-        if (kw.length >= 3 && text.includes(kw)) kwScore += kw.length * 2;
+        if (kw.length >= 3 && text.includes(kw)) {
+          kwScore += kw.length * 2;
+          if (kw.length >= 6) longKwScore += kw.length * 2;
+        }
+      }
+      // CJK密度低于30%时（疑似方向错误）：短关键词在乱码中易误匹配，不予采信；
+      // 仅长关键词（>=6字）保留部分分（长词在乱码中随机命中概率极低）
+      if (cjkRatio < 0.30) {
+        return Math.floor(longKwScore * 0.5);
       }
       return cjk + kwScore;
     }
@@ -4464,6 +4477,12 @@
             }
           }
           addDebugInfo('✅ 方向检测完成', `最佳得分${bestScore}`);
+        }
+
+        // 所有方向得分均低于阈值，返回空串避免乱码提取标题
+        if (bestScore < ORIENTATION_THRESHOLD) {
+          addDebugInfo('⚠️ OCR结果可信度低', `最佳得分${bestScore} < 阈值${ORIENTATION_THRESHOLD}，放弃OCR结果`);
+          return '';
         }
 
         addDebugInfo('📝 OCR结果(清理后)', bestText.slice(0, 300));
