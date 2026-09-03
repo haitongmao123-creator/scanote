@@ -4414,8 +4414,16 @@
         const pdf = await pdfjsLib.getDocument(safeData).promise;
         const page = await pdf.getPage(1);
 
-        const scale = 1.0;
-        const viewport = page.getViewport({ scale });
+        // 渲染分辨率：scale=2.0 约等于 144dpi，大幅提升小字/盖章区域 OCR 准确率；
+        // 若渲染后任一维度超过 3000px（超大页面），按比例缩放到 3000px 避免显存/Worker 超时。
+        let scale = 2.0;
+        let viewport = page.getViewport({ scale });
+        const MAX_DIM = 3000;
+        const maxDim = Math.max(viewport.width, viewport.height);
+        if (maxDim > MAX_DIM) {
+          scale *= MAX_DIM / maxDim;
+          viewport = page.getViewport({ scale });
+        }
 
         // 渲染整页到canvas（用于后续方向检测与旋转重试）
         const fullCanvas = document.createElement('canvas');
@@ -4463,8 +4471,8 @@
           for (const deg of [90, 270, 180]) {
             try {
               const rot = rotateCanvas(fullCanvas, deg);
-              // 旋转后标题仍位于顶部，取顶部40%（略放宽以提升命中率）
-              const cand = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.40)));
+              // 旋转后标题仍位于顶部：取顶部 50%（进一步放宽，应对大边距、印章压顶等情况）
+              const cand = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.50)));
               const sc = scoreOCRText(cand);
               addDebugInfo(`🔄 OCR结果(${deg}°)`, cand.slice(0, 120) + ` [得分${sc}]`);
               if (sc > bestScore) {
@@ -4707,17 +4715,29 @@
 
       // === 1. 前15行，先尝试跨行合并匹配（更长关键词更精准，优先）===
       for (let i = 0; i < searchRange - 1; i++) {
-        let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+        let lineA = stripLine(lines[i]);
+        let lineB = stripLine(lines[i + 1]);
+        let combined = lineA + lineB;
         if (combined.length < 4 || combined.length > 120) continue;
 
         for (const kw of keywords) {
           if (kw.length < 6) continue; // 跨行只匹配较长关键词（>=6字）
           if (combined.includes(kw)) {
-            let beforeKw = combined.substring(0, combined.indexOf(kw));
-            let title = kw;
-            // 保留前缀的条件：意义明确，且非标签类垃圾
-            if (isMeaningfulPrefix(beforeKw)) {
-              title = combined.substring(0, combined.indexOf(kw) + kw.length);
+            let kwIdx = combined.indexOf(kw);
+            let beforeKw = combined.substring(0, kwIdx);
+            let title;
+            if (isMeaningfulPrefix(beforeKw) || beforeKw.length === 0) {
+              title = combined.substring(0, kwIdx + kw.length);
+            } else {
+              title = kw;
+            }
+            // 跨行情况：仅在关键词完全位于 lineA（或 lineA+lineB 边界处）时，
+            // 允许把 lineA 中 kw 之后的内容追加，但绝不越过 lineA 的结尾进入 lineB 的区域
+            // （因为 lineB 里可能是正文，如"尊敬的管理人"会被误串入）
+            if (beforeKw.length === 0 && kwIdx + kw.length < lineA.length) {
+              const afterInA = lineA.substring(kwIdx + kw.length);
+              const tailMatch = afterInA.match(/^([\u4e00-\u9fa5]{1,20})/);
+              if (tailMatch) title += tailMatch[1];
             }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
@@ -4730,17 +4750,26 @@
 
       // === 1.5 跨行短关键词 + 有意义前缀（如：关于XX的通知/2024年度审计报告，这类跨两行且关键词短于6字的）===
       for (let i = 0; i < searchRange - 1; i++) {
-        let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+        let lineA = stripLine(lines[i]);
+        let lineB = stripLine(lines[i + 1]);
+        let combined = lineA + lineB;
         if (combined.length < 6 || combined.length > 120) continue;
 
         for (const kw of keywords) {
           if (kw.length > 5) continue; // 只匹配短关键词（<=5字），长关键词已经在上一步处理
           if (kw.length < 2) continue;
           if (combined.includes(kw)) {
-            let beforeKw = combined.substring(0, combined.indexOf(kw));
-            // 只有前缀有意义才保留（关于...的/年份/文号）
-            if (!isMeaningfulPrefix(beforeKw)) continue;
-            let title = combined.substring(0, combined.indexOf(kw) + kw.length);
+            let kwIdx = combined.indexOf(kw);
+            let beforeKw = combined.substring(0, kwIdx);
+            // 只有前缀有意义才保留（关于...的/年份/文号）；如果前缀为空也认为合理（短关键词本身开头的情况）
+            if (!(isMeaningfulPrefix(beforeKw) || beforeKw.length === 0)) continue;
+            let title = combined.substring(0, kwIdx + kw.length);
+            // 同上：跨行时只在 lineA 范围内追加，不允许越过 lineA 结尾吃到 lineB
+            if (beforeKw.length === 0 && kwIdx + kw.length < lineA.length) {
+              const afterInA = lineA.substring(kwIdx + kw.length);
+              const tailMatch = afterInA.match(/^([\u4e00-\u9fa5]{1,20})/);
+              if (tailMatch) title += tailMatch[1];
+            }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
               addDebugInfo('✅ 跨行短词匹配', `行${i+1}+${i+2} → kw=${kw} → ${title}`);
@@ -4759,10 +4788,19 @@
           // 超短关键词（≤2字）只在前5行匹配，防止正文中的"公告/通知/报告/函"等词被误当标题
           if (kw.length <= 2 && i >= 5) continue;
           if (stripped.includes(kw)) {
-            let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-            let title = kw;
-            if (isMeaningfulPrefix(beforeKw)) {
-              title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+            let kwIdx = stripped.indexOf(kw);
+            let beforeKw = stripped.substring(0, kwIdx);
+            let title;
+            if (isMeaningfulPrefix(beforeKw) || beforeKw.length === 0) {
+              title = stripped.substring(0, kwIdx + kw.length);
+            } else {
+              title = kw;
+            }
+            // 关键词在整行最左侧时，说明此行就是标题行本身，应尽可能保留关键词后到结尾的中文后缀
+            if (beforeKw.length === 0 && kwIdx + kw.length < stripped.length) {
+              const after = stripped.substring(kwIdx + kw.length);
+              const tailMatch = after.match(/^([\u4e00-\u9fa5]{1,25})/);
+              if (tailMatch) title += tailMatch[1];
             }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
@@ -4782,9 +4820,14 @@
           // 超短关键词（≤2字）只在前5行匹配，防止正文干扰
           if (kw.length <= 2 && i >= 5) continue;
           if (stripped.includes(kw)) {
-            let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-            if (!isMeaningfulPrefix(beforeKw)) continue;
-            let title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+            let kwIdx = stripped.indexOf(kw);
+            let beforeKw = stripped.substring(0, kwIdx);
+            if (!(isMeaningfulPrefix(beforeKw) || beforeKw.length === 0)) continue;
+            let title = stripped.substring(0, kwIdx + kw.length);
+            if (beforeKw.length === 0 && kwIdx + kw.length < stripped.length) {
+              const tailMatch = stripped.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,25})/);
+              if (tailMatch) title += tailMatch[1];
+            }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
               addDebugInfo('✅ 单行短词+前缀', `行${i+1} → kw=${kw} → ${title}`);
@@ -4814,6 +4857,11 @@
         let cleaned = cleanTitle(stripped);
         if (!isValidTitle(cleaned)) continue;
 
+        // 【扫描件乱码防护】：当回退选中的"最佳行"只有 2 个汉字时，
+        // 必须是"文档型后缀"结尾的词（如通知书、申请表、协议）才允许返回，
+        // 否则像"全区"、"人员"这种从乱码里挑出的两字随机词会被误当作标题。
+        if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
+
         let score = 0;
         if (cleaned.length >= 4 && cleaned.length <= 50) score += 50;
         if (cleaned.length >= 10 && cleaned.length <= 40) score += 20;
@@ -4835,6 +4883,8 @@
       // === 4. 最终回退 ===
       for (const line of lines) {
         let cleaned = cleanTitle(line);
+        // 同上：最终回退也拦一下两字非文档词（避免最末兜底也出垃圾）
+        if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
         if (isValidTitle(cleaned) && cleaned.length > 2 && cleaned.length < 80) return cleaned;
       }
       return '';
@@ -4951,10 +5001,27 @@
           addDebugInfo('❌ 文本提取错误', err.message);
         }
 
-        // 2.5 文本层为空（扫描型PDF），启动OCR识别
+        // 2.5 文本层质量检测 + OCR识别
+        // 扫描仪经常会把低质量 OCR 结果嵌入 PDF 文本层（全是英文乱码 + 零星汉字），
+        // 导致原逻辑误判为"文本型 PDF"，直接跳过我们自己的 OCR + 方向检测流程，
+        // 最终把乱码喂给标题提取，回退机制挑出"全区"这种看似正常的两字垃圾词。
+        function cjkDensity(text) {
+          if (!text) return 0;
+          const cjk = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+          const totalNonSpace = text.replace(/\s/g, '').length;
+          return totalNonSpace > 0 ? cjk / totalNonSpace : 0;
+        }
+        const textLayerDensity = cjkDensity(pdfTextLines);
+        const textLayerTrustworthy = textBlocksCount > 0 && pdfTextLines && pdfTextLines.trim().length > 0 && textLayerDensity >= 0.18;
+        const needOCR = !textLayerTrustworthy;
+
         let ocrText = '';
-        if (textBlocksCount === 0 || !pdfTextLines || pdfTextLines.trim().length === 0) {
-          addDebugInfo('🔎 检测到扫描型PDF', '文字层为空，启动本地OCR识别');
+        if (needOCR) {
+          if (textBlocksCount === 0 || !pdfTextLines || pdfTextLines.trim().length === 0) {
+            addDebugInfo('🔎 检测到扫描型PDF', '文字层为空，启动本地OCR识别');
+          } else {
+            addDebugInfo('⚠️ 文本层疑似扫描件乱码', `CJK密度${(textLayerDensity*100).toFixed(0)}% < 18%，放弃文本层，启动本地OCR识别（含方向自动检测）`);
+          }
           try {
             // 关键：给performOCR传独立副本（防止extractRawTextFromPDF已detach底层buffer）
             const ocrBufferCopy = new Uint8Array(
@@ -4963,6 +5030,12 @@
             ocrText = await performOCR(ocrBufferCopy);
             if (ocrText) {
               addDebugInfo('📝 OCR文本', ocrText.slice(0, 300));
+            } else {
+              addDebugInfo('⚠️ OCR层无结果', '所有方向得分均低于阈值，OCR返回空串');
+              // OCR 也拿不出有效内容时，回退使用原文本层（即使是乱码也比完全空强，避免全靠文件名）
+              if (pdfTextLines && pdfTextLines.trim().length > 0) {
+                addDebugInfo('♻️ 文本层降级兜底', 'OCR无有效结果，回退使用文本层内容作为最后手段');
+              }
             }
           } catch (ocrErr) {
             addDebugInfo('❌ OCR识别失败', ocrErr.message);
@@ -4970,8 +5043,8 @@
         }
 
         // === 3. 统一走成熟的extractTitleFromOCRText处理标题 ===
-        // 优先级：文本层（更准，更快） >  OCR层
-        const rawTextForExtract = pdfTextLines || ocrText;
+        // 优先级：可信文本层（中文充足）>  OCR层  > 不可信文本层（最后兜底）
+        const rawTextForExtract = (textLayerTrustworthy ? pdfTextLines : null) || ocrText || (textLayerTrustworthy ? null : pdfTextLines);
         let extractedTitle = '';
         if (rawTextForExtract) {
           extractedTitle = extractTitleFromOCRText(rawTextForExtract);

@@ -143,14 +143,25 @@ function extractTitleFromOCRText(text) {
 
   // === 1. 跨行长关键词匹配（>=6字）===
   for (let i = 0; i < searchRange - 1; i++) {
-    let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+    let lineA = stripLine(lines[i]);
+    let lineB = stripLine(lines[i + 1]);
+    let combined = lineA + lineB;
     if (combined.length < 4 || combined.length > 120) continue;
     for (const kw of keywords) {
       if (kw.length < 6) continue;
       if (combined.includes(kw)) {
-        let beforeKw = combined.substring(0, combined.indexOf(kw));
-        let title = kw;
-        if (isMeaningfulPrefix(beforeKw)) title = combined.substring(0, combined.indexOf(kw) + kw.length);
+        let kwIdx = combined.indexOf(kw);
+        let beforeKw = combined.substring(0, kwIdx);
+        let title;
+        if (isMeaningfulPrefix(beforeKw) || beforeKw.length === 0) {
+          title = combined.substring(0, kwIdx + kw.length);
+        } else {
+          title = kw;
+        }
+        if (beforeKw.length === 0 && kwIdx + kw.length < lineA.length) {
+          const m = lineA.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,20})/);
+          if (m) title += m[1];
+        }
         title = cleanTitle(title);
         if (isValidTitle(title)) return { title, source: `跨行长词[${i+1}+${i+2}] kw=${kw}` };
       }
@@ -159,14 +170,21 @@ function extractTitleFromOCRText(text) {
 
   // === 1.5 跨行短关键词 + 有意义前缀（<=5字）===
   for (let i = 0; i < searchRange - 1; i++) {
-    let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+    let lineA = stripLine(lines[i]);
+    let lineB = stripLine(lines[i + 1]);
+    let combined = lineA + lineB;
     if (combined.length < 6 || combined.length > 120) continue;
     for (const kw of keywords) {
       if (kw.length > 5 || kw.length < 2) continue;
       if (combined.includes(kw)) {
-        let beforeKw = combined.substring(0, combined.indexOf(kw));
-        if (!isMeaningfulPrefix(beforeKw)) continue;
-        let title = combined.substring(0, combined.indexOf(kw) + kw.length);
+        let kwIdx = combined.indexOf(kw);
+        let beforeKw = combined.substring(0, kwIdx);
+        if (!(isMeaningfulPrefix(beforeKw) || beforeKw.length === 0)) continue;
+        let title = combined.substring(0, kwIdx + kw.length);
+        if (beforeKw.length === 0 && kwIdx + kw.length < lineA.length) {
+          const m = lineA.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,20})/);
+          if (m) title += m[1];
+        }
         title = cleanTitle(title);
         if (isValidTitle(title)) return { title, source: `跨行短词+前缀[${i+1}+${i+2}] kw=${kw}` };
       }
@@ -180,9 +198,18 @@ function extractTitleFromOCRText(text) {
     for (const kw of keywords) {
       if (kw.length <= 2 && i >= 5) continue;
       if (stripped.includes(kw)) {
-        let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-        let title = kw;
-        if (isMeaningfulPrefix(beforeKw)) title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+        let kwIdx = stripped.indexOf(kw);
+        let beforeKw = stripped.substring(0, kwIdx);
+        let title;
+        if (isMeaningfulPrefix(beforeKw) || beforeKw.length === 0) {
+          title = stripped.substring(0, kwIdx + kw.length);
+        } else {
+          title = kw;
+        }
+        if (beforeKw.length === 0 && kwIdx + kw.length < stripped.length) {
+          const m = stripped.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,25})/);
+          if (m) title += m[1];
+        }
         title = cleanTitle(title);
         if (isValidTitle(title)) return { title, source: `单行[${i+1}] kw=${kw}` };
       }
@@ -197,9 +224,14 @@ function extractTitleFromOCRText(text) {
       if (kw.length > 5 || kw.length < 2) continue;
       if (kw.length <= 2 && i >= 5) continue;
       if (stripped.includes(kw)) {
-        let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-        if (!isMeaningfulPrefix(beforeKw)) continue;
-        let title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+        let kwIdx = stripped.indexOf(kw);
+        let beforeKw = stripped.substring(0, kwIdx);
+        if (!(isMeaningfulPrefix(beforeKw) || beforeKw.length === 0)) continue;
+        let title = stripped.substring(0, kwIdx + kw.length);
+        if (beforeKw.length === 0 && kwIdx + kw.length < stripped.length) {
+          const m = stripped.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,25})/);
+          if (m) title += m[1];
+        }
         title = cleanTitle(title);
         if (isValidTitle(title)) return { title, source: `单行短词+前缀[${i+1}] kw=${kw}` };
       }
@@ -219,6 +251,8 @@ function extractTitleFromOCRText(text) {
     if (/^(根据|依据|按照|为了|为进一步|鉴于|经研究|现通知|现公告|现函|尊敬的|各部门|各营业部|客户|股东|全体|地址|电话|传真|邮编|邮箱|联系人|基金类型|基金名称|管理人|托管人|法定代表人|执行事务合伙人)/.test(stripped)) continue;
     let cleaned = cleanTitle(stripped);
     if (!isValidTitle(cleaned)) continue;
+    // 【扫描件乱码防护】：只有 2 个汉字的行必须是文档型后缀结尾，否则"全区/人员/办公"这类乱码两字词会误当标题
+    if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
     let score = 0;
     if (cleaned.length >= 4 && cleaned.length <= 50) score += 50;
     if (cleaned.length >= 10 && cleaned.length <= 40) score += 20;
@@ -232,6 +266,8 @@ function extractTitleFromOCRText(text) {
   // === 4. 最终回退 ===
   for (const line of lines) {
     let cleaned = cleanTitle(line);
+    // 两字非文档后缀词也拦截
+    if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
     if (isValidTitle(cleaned) && cleaned.length > 2 && cleaned.length < 80) {
       return { title: cleaned, source: '最终回退' };
     }
