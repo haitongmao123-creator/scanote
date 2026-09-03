@@ -4625,7 +4625,7 @@
     }
 
     // 从OCR文本中提取标题
-    function extractTitleFromOCRText(text) {
+    function extractTitleFromOCRText(text, inputCjkDensity) {
       if (!text || text.trim().length === 0) return '';
 
       // 合并内置关键词和用户自定义关键词
@@ -4636,6 +4636,20 @@
       const searchRange = Math.min(lines.length, 15);
 
       addDebugInfo('🔍 OCR前15行', lines.slice(0, 15).map((l, i) => `[${i+1}] ${l}`).join(' | '));
+
+      // 计算 CJK 密度（兼容老调用者不传）
+      const cjkCount = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+      const nonSpaceCount = text.replace(/\s/g, '').length;
+      const cjkDensityVal = typeof inputCjkDensity === 'number' ? inputCjkDensity : (nonSpaceCount > 0 ? cjkCount / nonSpaceCount : 0);
+
+      // 【乱码绝对拒绝（深度防御）】：若传入文本自身 CJK 密度<15%，说明整段内容绝大部分
+      // 是 ASCII 乱码。即使前面四道关键词匹配都侥幸通过（几乎不可能），或有人绕过了
+      // "不可信文本层跳过"的闸门，这里也强制返回空，绝不允许回退评分从乱码里挑出
+      // "全区"、"办公"等两字随机词。随后上层会自动走"元数据→文件名"兜底链。
+      if (cjkDensityVal < 0.15) {
+        addDebugInfo('🛑 输入文本乱码', `CJK密度仅${(cjkDensityVal*100).toFixed(1)}% < 15%，拒绝提取，交由元数据/文件名兜底`);
+        return '';
+      }
 
       // 剥离前缀（版本号、编号、备案编码等）
       // 注意：码值部分限定 [A-Za-z0-9\-]{0,30}（字母数字/连字符，≤30位），禁止贪婪吞掉后面的中文标题内容
@@ -5043,11 +5057,27 @@
         }
 
         // === 3. 统一走成熟的extractTitleFromOCRText处理标题 ===
-        // 优先级：可信文本层（中文充足）>  OCR层  > 不可信文本层（最后兜底）
-        const rawTextForExtract = (textLayerTrustworthy ? pdfTextLines : null) || ocrText || (textLayerTrustworthy ? null : pdfTextLines);
+        // 标题识别引擎指纹（版本号）。用户看调试区第一行若找不到此指纹 = 浏览器缓存了旧HTML！
+        //   v20260903-01: CJK密度检测(18%)+scale=2.0+2字垃圾词拦截+方向重试(50%裁剪)+关键词后缀扩展
+        //   v20260903-02: 【新增】禁止OCR失败后fallback回不可信文本层；传入CJK密度到提取函数，拒绝喂乱码给回退
+        const ENGINE_FINGERPRINT = 'v20260903-02';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+2字垃圾拦截+OCR方向重试 scale=2.0 + 关键词后缀扩展 + 不可信层兜底屏蔽)`);
+
+        // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
+        const inputCjkDensity = cjkDensity(pdfTextLines);
+        addDebugInfo('📊 文本层CJK密度', `${(inputCjkDensity*100).toFixed(1)}% (阈值 >= 18% 才信任文本层)`);
+
+        // 优先级：可信文本层（>=18% CJK）> OCR层。
+        // 注意：不可信文本层（<18% CJK 的乱码层）绝不再作为 fallback，否则直接把乱码
+        // （哪怕OCR层也没结果）喂给标题提取函数，回退评分仍可能挑出"全区"这类两字垃圾词。
+        // 缺失时宁可直接空字符串，随后走【元数据 → 文件名】兜底链更安全。
+        const rawTextForExtract = (textLayerTrustworthy ? pdfTextLines : null) || ocrText || '';
+        if (!textLayerTrustworthy && pdfTextLines && !ocrText) {
+          addDebugInfo('🛑 跳过不可信文本层', `CJK密度${(inputCjkDensity*100).toFixed(1)}% 且 OCR 也无结果，禁止用乱码文本层提取标题，改走元数据/文件名兜底`);
+        }
         let extractedTitle = '';
         if (rawTextForExtract) {
-          extractedTitle = extractTitleFromOCRText(rawTextForExtract);
+          extractedTitle = extractTitleFromOCRText(rawTextForExtract, cjkDensity(rawTextForExtract));
           addDebugInfo('🏷️ 关键词提取标题', extractedTitle || '未匹配到关键词');
         }
 

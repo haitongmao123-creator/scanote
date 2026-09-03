@@ -1,7 +1,12 @@
 // 模拟 index.html 中的核心函数用于本地测试（与 index.html 同步）
 
-function extractTitleFromOCRText(text) {
-  if (!text || text.trim().length === 0) return '';
+function extractTitleFromOCRText(text, inputCjkDensity) {
+  if (!text || text.trim().length === 0) return { title: '', source: '空' };
+
+  const cjkCount = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const nonSpaceCount = text.replace(/\s/g, '').length;
+  const cjkDensityVal = typeof inputCjkDensity === 'number' ? inputCjkDensity : (nonSpaceCount > 0 ? cjkCount / nonSpaceCount : 0);
+  if (cjkDensityVal < 0.15) return { title: '', source: '乱码(CJK密度过低)' };
 
   const rawKeywords = [
     // === 量化私募基金账户运营岗位专用词库（与 index.html TITLE_KEYWORDS 同步）===
