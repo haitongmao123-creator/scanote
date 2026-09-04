@@ -4542,23 +4542,10 @@
           return '';
         }
 
-        // 3) 标题提取阶段：对正确方向做完整页面OCR（不裁剪，确保标题/股卡号在识别范围内）
-        //    方向检测阶段的裁剪50%可能把标题/股卡号行裁掉了，
-        //    所以对确定的最佳方向重新做一次完整页面OCR，拿到全页文本用于标题提取和股卡号兜底。
-        if (bestDeg !== 0) {
-          addDebugInfo('📄 完整页面OCR', `对最佳方向${bestDeg}°做完整页面识别（不裁剪），确保标题/股卡号区域在识别范围内...`);
-          try {
-            const rotFull = rotateCanvas(fullCanvas, bestDeg);
-            const fullPageText = cleanText(await ocrCanvas(rotFull));
-            if (fullPageText && fullPageText.length > bestText.length) {
-              addDebugInfo('📝 完整页面OCR结果', fullPageText.slice(0, 200) + ` [${fullPageText.length}字]`);
-              bestText = fullPageText;
-            }
-          } catch (e) {
-            addDebugInfo('⚠️ 完整页面OCR失败', e.message + '（沿用方向检测阶段的裁剪结果）');
-          }
-        }
-
+        // 3) 直接用方向检测阶段的结果（不再做完整页面OCR）
+        //    方向检测裁剪50%的结果已含标题区和账号区，重新完整页面OCR会：
+        //    a) 浪费一次OCR时间 b) 引入更多正文干扰词（如"身份证明"被关键词误匹配）
+        //    所以直接返回方向检测阶段的最优结果。
         addDebugInfo('📝 OCR结果(清理后)', bestText.slice(0, 300));
 
         return bestText;
@@ -5165,9 +5152,10 @@
         //   v20260904-03: 旋转重试遍历全部3方向+每方向顶/底双侧70%裁剪；新增确认单关键词
         //   v20260904-04: 方向检测(裁剪50%快速判断)与标题提取(完整页面OCR不裁剪)分离
         //   v20260904-05: 股卡号兜底命名：标题提取失败时，若OCR识别到沪市/深市股卡号，直接用"沪市B886100491"命名
-        //   v20260904-06: 【提速】横屏文档优先试270°(上部在左边的常见方向)，命中即停不再试其他方向；横屏OCR从5次降到2-3次
-        const ENGINE_FINGERPRINT = 'v20260904-06';
-        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+270°优先方向检测+完整页面OCR+股卡号兜底命名+2字垃圾拦截+确认单关键词 + 不可信层兜底屏蔽)`);
+        //   v20260904-06: 横屏文档优先试270°(上部在左边的常见方向)，命中即停不再试其他方向
+        //   v20260904-07: 【提速+修复】取消完整页面OCR(避免重复识别浪费时间+引入"身份证明"等正文干扰词)；股卡号优先命名提前到关键词匹配之前
+        const ENGINE_FINGERPRINT = 'v20260904-07';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+270°优先方向检测+股卡号优先命名+2字垃圾拦截+确认单关键词 + 不可信层兜底屏蔽)`);
 
         // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
         const inputCjkDensity = cjkDensity(pdfTextLines);
@@ -5181,8 +5169,18 @@
         if (!textLayerTrustworthy && pdfTextLines && !ocrText) {
           addDebugInfo('🛑 跳过不可信文本层', `CJK密度${(inputCjkDensity*100).toFixed(1)}% 且 OCR 也无结果，禁止用乱码文本层提取标题，改走元数据/文件名兜底`);
         }
+
+        // 【股卡号优先命名】：横屏证券账户确认单的标题行OCR识别困难（常被识别成乱码），
+        // 但"沪市A股账户子账户号码:B886100491"这类账号行OCR准确率高。
+        // 只要识别到股卡号，直接用"沪市B886100491"命名，跳过关键词匹配
+        // （否则关键词匹配会误匹配正文里的"身份证明""营业执照"等词作为标题）。
         let extractedTitle = '';
-        if (rawTextForExtract) {
+        const textForStockAcct = ocrText || pdfTextLines || '';
+        const stockAcct = extractStockAccount(textForStockAcct);
+        if (stockAcct.market && stockAcct.account) {
+          extractedTitle = stockAcct.market + stockAcct.account;
+          addDebugInfo('💳 股卡号优先命名', `${stockAcct.market} ${stockAcct.account}（识别到证券账户子账户号码，直接命名，跳过关键词匹配）`);
+        } else if (rawTextForExtract) {
           extractedTitle = extractTitleFromOCRText(rawTextForExtract, cjkDensity(rawTextForExtract));
           addDebugInfo('🏷️ 关键词提取标题', extractedTitle || '未匹配到关键词');
         }
@@ -5204,20 +5202,8 @@
           }
         }
 
-        // 5. 最终兜底：股卡号 → 文件名
-        // 当标题提取完全失败时，若OCR识别到沪市/深市股卡号（如"沪市A股账户子账户号码:B886100491"），
-        // 直接用"沪市B886100491"/"深市xxxxxxxx"命名——这类证券账户开户确认单的标题识别困难，
-        // 但账号行OCR准确率高，用账号兜底比文件名更精准。
-        let finalTitle = extractedTitle;
-        if (!finalTitle) {
-          const textForStockAcct = ocrText || pdfTextLines || '';
-          const stockAcct = extractStockAccount(textForStockAcct);
-          if (stockAcct.market && stockAcct.account) {
-            finalTitle = stockAcct.market + stockAcct.account;
-            addDebugInfo('💳 股卡号兜底命名', `${stockAcct.market} ${stockAcct.account}（标题提取失败，用识别到的证券账户子账户号码命名）`);
-          }
-        }
-        if (!finalTitle) finalTitle = filenameWithoutExt;
+        // 5. 最终兜底：文件名（股卡号已在前面优先处理）
+        let finalTitle = extractedTitle || filenameWithoutExt;
 
         // 统一清理标题（去前缀、去英文、按关键词截断正文尾）
         function universalCleanTitle(t) {
