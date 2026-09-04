@@ -5022,6 +5022,28 @@
       return '';
     }
 
+    // 从OCR文本中提取证券账户股卡号（沪市A股/深市A股子账户号码）
+    // 格式示例：沪市 A 股账户子账户号码 : B886100491  或  深市 A 股账户号码 : 0806020123
+    // 返回 { market: '沪市'|'深市'|'', account: 'B886100491' } 或空对象
+    // 用于标题提取失败时兜底命名：如"沪市B886100491"
+    function extractStockAccount(text) {
+      if (!text) return { market: '', account: '' };
+      // 宽松匹配：沪市/深市 + 最多20个非数字字符(A股/账户/子账户/号码等修饰词) + 号码/账号 + 分隔 + 字母数字账号
+      // 这样能容错 OCR 各种空格变体与"子账户类别 : 沪市 A 股账户子账户号码 : B886100491"这类前缀
+      const patterns = [
+        /沪\s*市\s*[^\d]{0,20}?[账号号码]\s*[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6,14})/,
+        /深\s*市\s*[^\d]{0,20}?[账号号码]\s*[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6,14})/,
+      ];
+      for (let i = 0; i < patterns.length; i++) {
+        const m = text.match(patterns[i]);
+        if (m && m[1]) {
+          const market = i === 0 ? '沪市' : '深市';
+          return { market, account: m[1] };
+        }
+      }
+      return { market: '', account: '' };
+    }
+
     // PDF Text Extraction (Local Mode) - Improved!
     async function extractTextFromPDF(file) {
       try {
@@ -5135,9 +5157,10 @@
         //   v20260904-01: 【新增】文档词组闸门：回退评分前要求OCR全文含至少一个文档常用词组(申请/开户/通知/账户等)，拦截伪汉字乱码
         //   v20260904-02: 【新增】OCR方向检测联动文档词组：0°得分虽高但无文档词组也强制旋转重试；全方向均无词组则放弃OCR结果
         //   v20260904-03: 旋转重试遍历全部3方向+每方向顶/底双侧70%裁剪；新增确认单关键词
-        //   v20260904-04: 【重构】方向检测(裁剪50%快速判断)与标题提取(完整页面OCR不裁剪)分离；横屏文档5次OCR(比7次快)，完整页面确保标题在识别范围内
-        const ENGINE_FINGERPRINT = 'v20260904-04';
-        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+方向检测与标题提取分离+完整页面OCR+2字垃圾拦截+确认单关键词 + 不可信层兜底屏蔽)`);
+        //   v20260904-04: 方向检测(裁剪50%快速判断)与标题提取(完整页面OCR不裁剪)分离
+        //   v20260904-05: 【新增】股卡号兜底命名：标题提取失败时，若OCR识别到沪市/深市股卡号，直接用"沪市B886100491"命名
+        const ENGINE_FINGERPRINT = 'v20260904-05';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+方向检测与标题提取分离+完整页面OCR+股卡号兜底命名+2字垃圾拦截+确认单关键词 + 不可信层兜底屏蔽)`);
 
         // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
         const inputCjkDensity = cjkDensity(pdfTextLines);
@@ -5174,8 +5197,20 @@
           }
         }
 
-        // 5. 最终兜底：文件名
-        let finalTitle = extractedTitle || filenameWithoutExt;
+        // 5. 最终兜底：股卡号 → 文件名
+        // 当标题提取完全失败时，若OCR识别到沪市/深市股卡号（如"沪市A股账户子账户号码:B886100491"），
+        // 直接用"沪市B886100491"/"深市xxxxxxxx"命名——这类证券账户开户确认单的标题识别困难，
+        // 但账号行OCR准确率高，用账号兜底比文件名更精准。
+        let finalTitle = extractedTitle;
+        if (!finalTitle) {
+          const textForStockAcct = ocrText || pdfTextLines || '';
+          const stockAcct = extractStockAccount(textForStockAcct);
+          if (stockAcct.market && stockAcct.account) {
+            finalTitle = stockAcct.market + stockAcct.account;
+            addDebugInfo('💳 股卡号兜底命名', `${stockAcct.market} ${stockAcct.account}（标题提取失败，用识别到的证券账户子账户号码命名）`);
+          }
+        }
+        if (!finalTitle) finalTitle = filenameWithoutExt;
 
         // 统一清理标题（去前缀、去英文、按关键词截断正文尾）
         function universalCleanTitle(t) {
