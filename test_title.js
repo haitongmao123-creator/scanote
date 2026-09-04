@@ -243,6 +243,27 @@ function extractTitleFromOCRText(text, inputCjkDensity) {
     }
   }
 
+  // === 2.9 文档词组闸门：回退评分前先检测整段OCR是否包含任意"文档常用词组" ===
+  // 伪汉字乱码（横屏文档被竖向OCR）会凑出较高CJK密度绕过密度拦截，但几乎不会凑出
+  // "申请/开户/通知/协议/账户/资金"这类2字组合词。正常金融文档必然命中至少一个。
+  // 若全段无任何词组命中 → 视为乱码，直接跳过回退评分与最终回退，交由元数据/文件名兜底。
+  const DOCUMENT_VOCAB = [
+    '申请', '开户', '销户', '变更', '注销', '撤销', '备案', '登记',
+    '通知', '公告', '回执', '确认', '证明', '声明', '承诺', '告知',
+    '协议', '合同', '契约', '委托', '授权', '存管', '监管', '托管',
+    '账户', '账号', '资金', '银行', '期货', '证券', '基金', '产品',
+    '对账', '结算', '清算', '流水', '明细', '余额', '持仓', '交易',
+    '印鉴', '密码', '证书', '网银', '转账', '划转', '划款', '汇款',
+    '业务', '办理', '受理', '审批', '审核', '经办', '复核', '授权',
+    '风险', '揭示', '提示', '合规', '法律', '审计', '评估', '调查',
+    '到账', '入金', '出金', '续约', '解约', '冻结', '解冻', '激活'
+  ];
+  const fullText = text;
+  const vocabHit = DOCUMENT_VOCAB.find(v => fullText.includes(v));
+  if (!vocabHit) {
+    return { title: '', source: '乱码(无文档词组)' };
+  }
+
   // === 3. 回退：评分选标题 ===
   let bestLine = '', bestScore = -1;
   for (let i = 0; i < searchRange; i++) {
@@ -266,7 +287,7 @@ function extractTitleFromOCRText(text, inputCjkDensity) {
     score += Math.max(0, 10 - i);
     if (score > bestScore) { bestScore = score; bestLine = cleaned; }
   }
-  if (bestLine) return { title: bestLine, source: `回退评分 score=${bestScore}` };
+  if (bestLine) return { title: bestLine, source: `回退评分 score=${bestScore} (词组:${vocabHit})` };
 
   // === 4. 最终回退 ===
   for (const line of lines) {
@@ -274,7 +295,7 @@ function extractTitleFromOCRText(text, inputCjkDensity) {
     // 两字非文档后缀词也拦截
     if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
     if (isValidTitle(cleaned) && cleaned.length > 2 && cleaned.length < 80) {
-      return { title: cleaned, source: '最终回退' };
+      return { title: cleaned, source: `最终回退 (词组:${vocabHit})` };
     }
   }
   return { title: '', source: '空' };
@@ -377,6 +398,16 @@ const testCases = [
     name: 'Case 11: 银行账户信息确认函（正文含"公告"干扰词）',
     ocrText: `银行账户信息确认函\n尊敬的管理人：\n贵公司管理的"茂源信淮量化选股7号私募证券投资基金"银行\n账户相关信息如下：\n账户户名:中信建投证券股份有限公司茂源信淮量化选股7号\n银行账号:110062159018800358952\n开户行:交通银行北京三里河支行\n大额支付系统号:301100000347\n银行账户开户利率:按0.385%计息。\n注: 计息期若遇银行调整利率, 调整后账户利率以开户银行最新公告为准。\n银证关联需要券商营业部在开立三方账户时直接将上述营业执照号发送银行并预指定\n托管部联系方式: 010-56161929-4tuoguan@csc.com.cn\n中信建投证券股份有限公司托管部\n2021-09-27`,
     expect: '银行账户信息确认函'
+  },
+  {
+    name: 'Case 12: 伪汉字乱码（横屏文档竖向OCR）→ 应返回空走文件名兜底',
+    ocrText: `三2站国生汪汪8\n= "\n将互革 SDDS =\n°g 人 SN 开\n E 人类本 ReE\n只长3由\n§# ee si/ 员\nS = 8 NS\n& 区员 w B`,
+    expect: ''
+  },
+  {
+    name: 'Case 13: 纯伪汉字乱码（高频字但无文档词组）→ 应返回空',
+    ocrText: `三二三四\n五六七八\n九十百千\n甲乙丙丁\n子丑寅卯\n金木水火`,
+    expect: ''
   }
 ];
 
