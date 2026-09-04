@@ -4496,25 +4496,46 @@
           } else {
             addDebugInfo('🔄 竖向识别文字过少', '疑似横向/旋转扫描件，尝试旋转重试...');
           }
+          // 始终遍历所有方向（不提前break）：横屏扫描件的标题可能落在90°/270°的任一"边"上，
+          // 某方向虽然能识别出正文表格（得分高），但另一方向才真正把标题放在裁剪区内。
+          // 每个方向尝试两边裁剪：先裁"顶部"70%，再裁"底部"70%（=从对侧裁，取同比例），
+          // 组合覆盖标题可能出现的所有边缘位置，避免漏识别。
           for (const deg of [90, 270, 180]) {
             try {
               const rot = rotateCanvas(fullCanvas, deg);
-              // 旋转后标题仍位于顶部：取顶部 50%（进一步放宽，应对大边距、印章压顶等情况）
-              const cand = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.50)));
-              const sc = scoreOCRText(cand);
-              const candHasVocab = hasDocumentVocab(cand);
-              addDebugInfo(`🔄 OCR结果(${deg}°)`, cand.slice(0, 120) + ` [得分${sc}, 词组${candHasVocab ? '✓' : '✗'}]`);
-              // 选最优：优先选"含文档词组"的方向；同词组状态下取高分；不含词组的方向仅在所有方向都不含词组时作为弱兜底
-              const better = candHasVocab && !bestHasVocab ? true
-                           : candHasVocab === bestHasVocab && sc > bestScore ? true
+              // 裁顶部 70%：正常文档旋转后标题在顶部的情况
+              const candTop = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.70)));
+              const scTop = scoreOCRText(candTop);
+              const cvTop = hasDocumentVocab(candTop);
+              addDebugInfo(`🔄 OCR结果(${deg}° 顶70%)`, candTop.slice(0, 120) + ` [得分${scTop}, 词组${cvTop ? '✓' : '✗'}]`);
+              // 裁底部 70%：旋转后标题落在"底部"边的情况（如本用户案例：标题在原图左侧，顺时针90°后标题落在底部边）
+              const w = rot.width, h = rot.height;
+              const botCanvas = document.createElement('canvas');
+              const botCtx = botCanvas.getContext('2d');
+              const botH = Math.ceil(h * 0.70);
+              botCanvas.width = w;
+              botCanvas.height = botH;
+              botCtx.drawImage(rot, 0, h - botH, w, botH, 0, 0, w, botH);
+              const candBot = cleanText(await ocrCanvas(botCanvas));
+              const scBot = scoreOCRText(candBot);
+              const cvBot = hasDocumentVocab(candBot);
+              addDebugInfo(`🔄 OCR结果(${deg}° 底70%)`, candBot.slice(0, 120) + ` [得分${scBot}, 词组${cvBot ? '✓' : '✗'}]`);
+              // 选择本方向内 top 与 bot 中更优的结果（同规则：含词组优先，其次得分）
+              let cand, sc, cv;
+              const botBetterThanTop = cvBot && !cvTop ? true
+                                     : cvBot === cvTop && scBot > scTop ? true
+                                     : false;
+              if (botBetterThanTop) { cand = candBot; sc = scBot; cv = cvBot; }
+              else                   { cand = candTop; sc = scTop; cv = cvTop; }
+              // 与全局最佳比较
+              const better = cv && !bestHasVocab ? true
+                           : cv === bestHasVocab && sc > bestScore ? true
                            : false;
               if (better) {
                 bestScore = sc;
                 bestText = cand;
-                bestHasVocab = candHasVocab;
+                bestHasVocab = cv;
               }
-              // 已含文档词组且得分足够好，提前结束
-              if (candHasVocab && sc >= ORIENTATION_THRESHOLD * 2) break;
             } catch (e) {
               addDebugInfo(`⚠️ 旋转${deg}°识别失败`, e.message);
             }
@@ -4631,6 +4652,7 @@
         '托管账户信息确认函', '托管账户开户通知单', '托管资金专门账户信息确认函',
         '托管资产专用银行账户变更确认书',
         '账户开立回执', '期货开户回执单', '期货开户回执',
+        '证券账户开户办理确认单', '证券账户开户确认单', '开户办理确认单', '账户开户办理确认单', '证券开户办理确认单',
         '基金产品合同', '产品合同', '基金合同', '产品协议', '信托合同', '资管合同',
         '协议', '合同', '契约', '协议书',
         '承诺书', '确认书', '告知书', '通知书', '声明书', '说明书',
@@ -5116,8 +5138,9 @@
         //   v20260903-02: 【新增】禁止OCR失败后fallback回不可信文本层；传入CJK密度到提取函数，拒绝喂乱码给回退
         //   v20260904-01: 【新增】文档词组闸门：回退评分前要求OCR全文含至少一个文档常用词组(申请/开户/通知/账户等)，拦截伪汉字乱码
         //   v20260904-02: 【新增】OCR方向检测联动文档词组：0°得分虽高但无文档词组也强制旋转重试；全方向均无词组则放弃OCR结果
-        const ENGINE_FINGERPRINT = 'v20260904-02';
-        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+方向重试联动词组+2字垃圾拦截+OCR方向重试 scale=2.0 + 关键词后缀扩展 + 不可信层兜底屏蔽)`);
+        //   v20260904-03: 【核心】旋转重试遍历全部3方向+每方向顶/底双侧70%裁剪(覆盖横屏标题任一边)；新增"证券账户开户办理确认单"等确认单关键词
+        const ENGINE_FINGERPRINT = 'v20260904-03';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+方向全遍历+双侧70%裁剪+2字垃圾拦截+OCR方向重试 scale=2.0 + 确认单关键词补全 + 不可信层兜底屏蔽)`);
 
         // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
         const inputCjkDensity = cjkDensity(pdfTextLines);
