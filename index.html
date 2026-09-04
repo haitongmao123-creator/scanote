@@ -5018,21 +5018,32 @@
     // 从OCR文本中提取证券账户股卡号（沪市A股/深市A股子账户号码）
     // 格式示例：沪市 A 股账户子账户号码 : B886100491  或  深市 A 股账户号码 : 0806020123
     // 返回 { market: '沪市'|'深市'|'', account: 'B886100491' } 或空对象
-    // 用于标题提取失败时兜底命名：如"沪市B886100491"
+    // 用于股卡号优先命名：如"沪市B886100491"
     function extractStockAccount(text) {
       if (!text) return { market: '', account: '' };
-      // 宽松匹配：沪市/深市 + 最多20个非数字字符(A股/账户/子账户/号码等修饰词) + 号码/账号 + 分隔 + 字母数字账号
-      // 这样能容错 OCR 各种空格变体与"子账户类别 : 沪市 A 股账户子账户号码 : B886100491"这类前缀
-      const patterns = [
-        /沪\s*市\s*[^\d]{0,20}?[账号号码]\s*[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6,14})/,
-        /深\s*市\s*[^\d]{0,20}?[账号号码]\s*[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6,14})/,
+      // 策略一：完整标签匹配（"沪市 A 股账户子账户号码 : B886100491"）
+      const labelPatterns = [
+        { re: /沪\s*市\s*[^\d]{0,30}?[账号号码户]\s*[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6,14})/, market: '沪市' },
+        { re: /深\s*市\s*[^\d]{0,30}?[账号号码户]\s*[:：]?\s*[，,\.。\s]*([A-Za-z0-9]{6,14})/, market: '深市' },
       ];
-      for (let i = 0; i < patterns.length; i++) {
-        const m = text.match(patterns[i]);
-        if (m && m[1]) {
-          const market = i === 0 ? '沪市' : '深市';
-          return { market, account: m[1] };
-        }
+      for (const p of labelPatterns) {
+        const m = text.match(p.re);
+        if (m && m[1]) return { market: p.market, account: m[1] };
+      }
+      // 策略二：OCR把中文标签识别错时，按股卡号本身的格式特征匹配
+      //   沪市A股子账户号码: 以B开头 + 9位数字 (共10位, 如 B886100491)
+      //   深市A股子账户号码: 以0开头 + 9位数字 (共10位, 如 0806020123)
+      //   再结合全文是否出现"沪市"/"深市"关键词判断市场
+      const fmtPatterns = [
+        // B + 9个数字 (B886100491) - 非数字字母做边界，避免身份证号/流水号里误匹配
+        { re: /(?:^|[^A-Za-z0-9])(B\d{9})(?:$|[^A-Za-z0-9])/, market: /沪\s*市/.test(text) ? '沪市' : '' },
+        // 0 + 9个数字，但排除纯流水号/日期/电话：要求不是一码通前缀，且前后有"账户/号码/子账户"等标识
+        // 深市账号常在"深市"附近，先不做强匹配（一码通是1开头12位，深市是0开头10位，格式上容易区分）
+        { re: /(?:^|[^0-9])(0\d{9})(?:$|[^0-9])/, market: /深\s*市/.test(text) ? '深市' : '' },
+      ];
+      for (const p of fmtPatterns) {
+        const m = text.match(p.re);
+        if (m && m[1] && p.market) return { market: p.market, account: m[1] };
       }
       return { market: '', account: '' };
     }
@@ -5153,9 +5164,10 @@
         //   v20260904-04: 方向检测(裁剪50%快速判断)与标题提取(完整页面OCR不裁剪)分离
         //   v20260904-05: 股卡号兜底命名：标题提取失败时，若OCR识别到沪市/深市股卡号，直接用"沪市B886100491"命名
         //   v20260904-06: 横屏文档优先试270°(上部在左边的常见方向)，命中即停不再试其他方向
-        //   v20260904-07: 【提速+修复】取消完整页面OCR(避免重复识别浪费时间+引入"身份证明"等正文干扰词)；股卡号优先命名提前到关键词匹配之前
-        const ENGINE_FINGERPRINT = 'v20260904-07';
-        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+270°优先方向检测+股卡号优先命名+2字垃圾拦截+确认单关键词 + 不可信层兜底屏蔽)`);
+        //   v20260904-07: 取消完整页面OCR提速；股卡号优先命名提前到关键词匹配之前
+        //   v20260904-08: 【加固】股卡号识别：1)非数字上限从20→30字符  2)新增格式特征匹配(B+9位/0+9位+市场关键词)  3)逐行+全文双重扫描  4)新增调试日志确认匹配过程
+        const ENGINE_FINGERPRINT = 'v20260904-08';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+270°优先方向检测+股卡号逐行+全文双扫描+格式特征兜底匹配+2字垃圾拦截+确认单关键词)`);
 
         // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
         const inputCjkDensity = cjkDensity(pdfTextLines);
@@ -5176,13 +5188,24 @@
         // （否则关键词匹配会误匹配正文里的"身份证明""营业执照"等词作为标题）。
         let extractedTitle = '';
         const textForStockAcct = ocrText || pdfTextLines || '';
-        const stockAcct = extractStockAccount(textForStockAcct);
+        // 先逐行扫描（OCR把账号行单独成一行，逐行匹配避免文本拼接时连字干扰正则边界）
+        let stockAcct = { market: '', account: '' };
+        const stockLines = textForStockAcct.split(/\n|[\r\u2028\u2029]/).map(l => l && l.trim()).filter(Boolean);
+        for (const ln of stockLines) {
+          const r = extractStockAccount(ln);
+          if (r.market && r.account) { stockAcct = r; break; }
+        }
+        // 逐行没找到时，全文再扫一次（容错OCR把账号行与前后行连成一行）
+        if (!stockAcct.market) stockAcct = extractStockAccount(textForStockAcct);
         if (stockAcct.market && stockAcct.account) {
           extractedTitle = stockAcct.market + stockAcct.account;
           addDebugInfo('💳 股卡号优先命名', `${stockAcct.market} ${stockAcct.account}（识别到证券账户子账户号码，直接命名，跳过关键词匹配）`);
-        } else if (rawTextForExtract) {
-          extractedTitle = extractTitleFromOCRText(rawTextForExtract, cjkDensity(rawTextForExtract));
-          addDebugInfo('🏷️ 关键词提取标题', extractedTitle || '未匹配到关键词');
+        } else {
+          addDebugInfo('💳 股卡号扫描', `未识别到沪市/深市股卡号（逐行${stockLines.length}行+全文均未匹配B\\d{9}/0\\d{9}带市场关键词）`);
+          if (rawTextForExtract) {
+            extractedTitle = extractTitleFromOCRText(rawTextForExtract, cjkDensity(rawTextForExtract));
+            addDebugInfo('🏷️ 关键词提取标题', extractedTitle || '未匹配到关键词');
+          }
         }
 
         // 4. 尝试获取PDF元数据（仅当前面完全失败时兜底）
