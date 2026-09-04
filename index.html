@@ -4379,6 +4379,25 @@
       return out;
     }
 
+    // 文档常用词组（与 extractTitleFromOCRText 内 DOCUMENT_VOCAB 保持同步）
+    // 用于两层防护：①OCR方向检测时判定某方向结果是否为伪汉字乱码 ②标题回退评分前的乱码闸门
+    // 伪汉字乱码（横屏文档被竖向OCR）会凑出较高CJK密度，但几乎不会凑出"申请/开户/通知/账户"这类2字组合词
+    const DOCUMENT_VOCAB = [
+      '申请', '开户', '销户', '变更', '注销', '撤销', '备案', '登记',
+      '通知', '公告', '回执', '确认', '证明', '声明', '承诺', '告知',
+      '协议', '合同', '契约', '委托', '授权', '存管', '监管', '托管',
+      '账户', '账号', '资金', '银行', '期货', '证券', '基金', '产品',
+      '对账', '结算', '清算', '流水', '明细', '余额', '持仓', '交易',
+      '印鉴', '密码', '证书', '网银', '转账', '划转', '划款', '汇款',
+      '业务', '办理', '受理', '审批', '审核', '经办', '复核',
+      '风险', '揭示', '提示', '合规', '法律', '审计', '评估', '调查',
+      '到账', '入金', '出金', '续约', '解约', '冻结', '解冻', '激活'
+    ];
+    function hasDocumentVocab(text) {
+      if (!text) return false;
+      return DOCUMENT_VOCAB.some(v => text.includes(v));
+    }
+
     // 评估OCR文本质量得分：中文汉字数 + 命中关键词加权（用于判断方向是否正确）
     // 引入CJK密度检测：横向/旋转扫描件在错误方向下会输出大量ASCII乱码夹杂少量随机汉字，
     // 需通过CJK密度区分正确方向与错误方向
@@ -4462,34 +4481,58 @@
         addDebugInfo('🔍 启动本地OCR', '识别第1页上半部分（0°）...');
         let bestText = cleanText(await ocrCanvas(cropTopCanvas(fullCanvas, 0.30)));
         let bestScore = scoreOCRText(bestText);
-        addDebugInfo('📝 OCR结果(0°)', bestText.slice(0, 120) + ` [得分${bestScore}]`);
+        let bestHasVocab = hasDocumentVocab(bestText); // 文档词组命中：真正可读的金融文档必然含"申请/开户/通知/账户"等组合词
+        addDebugInfo('📝 OCR结果(0°)', bestText.slice(0, 120) + ` [得分${bestScore}, 词组${bestHasVocab ? '✓' : '✗'}]`);
 
-        // 2) 若0°方向文字过少（疑似横向/旋转扫描件），按90°/270°/180°重试，取最优
+        // 2) 方向检测触发条件（满足任一即重试）：
+        //    a) 得分低于阈值（传统文字过少判定）
+        //    b) 得分虽高但不含任何文档词组 → 伪汉字乱码（横屏文档被竖向OCR会凑出较高CJK密度与偶发长关键词命中，
+        //       但几乎不会凑出"申请/开户/通知/账户"这类2字组合词）
         const ORIENTATION_THRESHOLD = 8; // 低于此分视为方向错误
-        if (bestScore < ORIENTATION_THRESHOLD) {
-          addDebugInfo('🔄 竖向识别文字过少', '疑似横向/旋转扫描件，尝试旋转重试...');
+        const needRotateRetry = bestScore < ORIENTATION_THRESHOLD || !bestHasVocab;
+        if (needRotateRetry) {
+          if (!bestHasVocab && bestScore >= ORIENTATION_THRESHOLD) {
+            addDebugInfo('🔄 0°结果疑似伪汉字乱码', `得分${bestScore}≥${ORIENTATION_THRESHOLD}但不含任何文档常用词组，强制触发旋转重试寻找正确方向...`);
+          } else {
+            addDebugInfo('🔄 竖向识别文字过少', '疑似横向/旋转扫描件，尝试旋转重试...');
+          }
           for (const deg of [90, 270, 180]) {
             try {
               const rot = rotateCanvas(fullCanvas, deg);
               // 旋转后标题仍位于顶部：取顶部 50%（进一步放宽，应对大边距、印章压顶等情况）
               const cand = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.50)));
               const sc = scoreOCRText(cand);
-              addDebugInfo(`🔄 OCR结果(${deg}°)`, cand.slice(0, 120) + ` [得分${sc}]`);
-              if (sc > bestScore) {
+              const candHasVocab = hasDocumentVocab(cand);
+              addDebugInfo(`🔄 OCR结果(${deg}°)`, cand.slice(0, 120) + ` [得分${sc}, 词组${candHasVocab ? '✓' : '✗'}]`);
+              // 选最优：优先选"含文档词组"的方向；同词组状态下取高分；不含词组的方向仅在所有方向都不含词组时作为弱兜底
+              const better = candHasVocab && !bestHasVocab ? true
+                           : candHasVocab === bestHasVocab && sc > bestScore ? true
+                           : false;
+              if (better) {
                 bestScore = sc;
                 bestText = cand;
+                bestHasVocab = candHasVocab;
               }
-              if (sc >= ORIENTATION_THRESHOLD * 2) break; // 已足够好，提前结束
+              // 已含文档词组且得分足够好，提前结束
+              if (candHasVocab && sc >= ORIENTATION_THRESHOLD * 2) break;
             } catch (e) {
               addDebugInfo(`⚠️ 旋转${deg}°识别失败`, e.message);
             }
           }
-          addDebugInfo('✅ 方向检测完成', `最佳得分${bestScore}`);
+          addDebugInfo('✅ 方向检测完成', `最佳得分${bestScore}, 词组${bestHasVocab ? '✓' : '✗'}`);
         }
 
         // 所有方向得分均低于阈值，返回空串避免乱码提取标题
         if (bestScore < ORIENTATION_THRESHOLD) {
           addDebugInfo('⚠️ OCR结果可信度低', `最佳得分${bestScore} < 阈值${ORIENTATION_THRESHOLD}，放弃OCR结果`);
+          return '';
+        }
+
+        // 最终防护：若所有方向都不含任何文档词组（bestHasVocab=false），
+        // 说明整页OCR都是伪汉字乱码（横屏文档所有方向都没识别对），直接放弃OCR结果，
+        // 交由上层走【元数据 → 文件名】兜底链，避免把乱码喂给标题提取。
+        if (!bestHasVocab) {
+          addDebugInfo('⚠️ OCR全方向均无文档词组', '4个方向识别结果均不含任何文档常用词组，判定为整页乱码，放弃OCR结果');
           return '';
         }
 
@@ -4855,18 +4898,8 @@
       // 伪汉字乱码（横屏文档被竖向OCR）会凑出较高CJK密度绕过密度拦截，但几乎不会凑出
       // "申请/开户/通知/协议/账户/资金"这类2字组合词。正常金融文档必然命中至少一个。
       // 若全段无任何词组命中 → 视为乱码，直接跳过回退评分与最终回退，交由元数据/文件名兜底。
-      const DOCUMENT_VOCAB = [
-        '申请', '开户', '销户', '变更', '注销', '撤销', '备案', '登记',
-        '通知', '公告', '回执', '确认', '证明', '声明', '承诺', '告知',
-        '协议', '合同', '契约', '委托', '授权', '存管', '监管', '托管',
-        '账户', '账号', '资金', '银行', '期货', '证券', '基金', '产品',
-        '对账', '结算', '清算', '流水', '明细', '余额', '持仓', '交易',
-        '印鉴', '密码', '证书', '网银', '转账', '划转', '划款', '汇款',
-        '业务', '办理', '受理', '审批', '审核', '经办', '复核',
-        '风险', '揭示', '提示', '合规', '法律', '审计', '评估', '调查',
-        '到账', '入金', '出金', '续约', '解约', '冻结', '解冻', '激活'
-      ];
-      const vocabHit = DOCUMENT_VOCAB.find(v => text.includes(v));
+      // 注意：DOCUMENT_VOCAB 与 hasDocumentVocab 已在模块级定义为单一数据源，此处直接引用。
+      const vocabHit = hasDocumentVocab(text);
       if (!vocabHit) {
         addDebugInfo('🛑 伪汉字乱码拦截', 'OCR文本不含任何文档常用词组(申请/开户/通知/账户等)，判定为乱码，跳过回退评分，走元数据/文件名兜底');
         return '';
@@ -5082,8 +5115,9 @@
         //   v20260903-01: CJK密度检测(18%)+scale=2.0+2字垃圾词拦截+方向重试(50%裁剪)+关键词后缀扩展
         //   v20260903-02: 【新增】禁止OCR失败后fallback回不可信文本层；传入CJK密度到提取函数，拒绝喂乱码给回退
         //   v20260904-01: 【新增】文档词组闸门：回退评分前要求OCR全文含至少一个文档常用词组(申请/开户/通知/账户等)，拦截伪汉字乱码
-        const ENGINE_FINGERPRINT = 'v20260904-01';
-        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+2字垃圾拦截+OCR方向重试 scale=2.0 + 关键词后缀扩展 + 不可信层兜底屏蔽)`);
+        //   v20260904-02: 【新增】OCR方向检测联动文档词组：0°得分虽高但无文档词组也强制旋转重试；全方向均无词组则放弃OCR结果
+        const ENGINE_FINGERPRINT = 'v20260904-02';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+方向重试联动词组+2字垃圾拦截+OCR方向重试 scale=2.0 + 关键词后缀扩展 + 不可信层兜底屏蔽)`);
 
         // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
         const inputCjkDensity = cjkDensity(pdfTextLines);
