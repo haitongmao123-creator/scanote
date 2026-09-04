@@ -4496,9 +4496,11 @@
           } else {
             addDebugInfo('🔄 竖向识别文字过少', '疑似横向/旋转扫描件，尝试旋转重试...');
           }
-          // 方向检测阶段：每个方向裁剪顶部50%做1次快速OCR（只用于判断方向，不用于标题提取）
-          // 遍历全部3方向，选含文档词组且得分最高的方向
-          for (const deg of [90, 270, 180]) {
+          // 方向检测：横屏扫描件最常见的方向是270°（文件上部在左边，逆时针90°），
+          // 优先试270°，命中含文档词组就直接确定方向，不再试其他方向（大幅提速）。
+          // 270°失败才回退试90°/180°。
+          const tryOrder = [270, 90, 180];
+          for (const deg of tryOrder) {
             try {
               const rot = rotateCanvas(fullCanvas, deg);
               const cand = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.50)));
@@ -4514,6 +4516,11 @@
                 bestText = cand;
                 bestHasVocab = cv;
                 bestDeg = deg;
+              }
+              // 已找到含文档词组且得分足够好的方向，提前结束（提速：不再试其他方向）
+              if (cv && sc >= ORIENTATION_THRESHOLD * 2) {
+                addDebugInfo('⚡ 命中正确方向', `${deg}°得分${sc}≥${ORIENTATION_THRESHOLD*2}且含文档词组，提前结束方向检测`);
+                break;
               }
             } catch (e) {
               addDebugInfo(`⚠️ 旋转${deg}°识别失败`, e.message);
@@ -4535,12 +4542,11 @@
           return '';
         }
 
-        // 3) 标题提取阶段：对正确方向做完整页面OCR（不裁剪，确保标题在识别范围内）
-        //    方向检测阶段的裁剪50%可能把标题裁掉了（横屏文档标题可能在页面任一边缘），
-        //    所以对确定的最佳方向重新做一次完整页面OCR，拿到全页文本用于标题提取。
-        //    竖向文档（bestDeg=0）的0°裁剪30%已含标题，无需重复OCR。
+        // 3) 标题提取阶段：对正确方向做完整页面OCR（不裁剪，确保标题/股卡号在识别范围内）
+        //    方向检测阶段的裁剪50%可能把标题/股卡号行裁掉了，
+        //    所以对确定的最佳方向重新做一次完整页面OCR，拿到全页文本用于标题提取和股卡号兜底。
         if (bestDeg !== 0) {
-          addDebugInfo('📄 完整页面OCR', `对最佳方向${bestDeg}°做完整页面识别（不裁剪），确保标题区域在识别范围内...`);
+          addDebugInfo('📄 完整页面OCR', `对最佳方向${bestDeg}°做完整页面识别（不裁剪），确保标题/股卡号区域在识别范围内...`);
           try {
             const rotFull = rotateCanvas(fullCanvas, bestDeg);
             const fullPageText = cleanText(await ocrCanvas(rotFull));
@@ -5158,9 +5164,10 @@
         //   v20260904-02: 【新增】OCR方向检测联动文档词组：0°得分虽高但无文档词组也强制旋转重试；全方向均无词组则放弃OCR结果
         //   v20260904-03: 旋转重试遍历全部3方向+每方向顶/底双侧70%裁剪；新增确认单关键词
         //   v20260904-04: 方向检测(裁剪50%快速判断)与标题提取(完整页面OCR不裁剪)分离
-        //   v20260904-05: 【新增】股卡号兜底命名：标题提取失败时，若OCR识别到沪市/深市股卡号，直接用"沪市B886100491"命名
-        const ENGINE_FINGERPRINT = 'v20260904-05';
-        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+方向检测与标题提取分离+完整页面OCR+股卡号兜底命名+2字垃圾拦截+确认单关键词 + 不可信层兜底屏蔽)`);
+        //   v20260904-05: 股卡号兜底命名：标题提取失败时，若OCR识别到沪市/深市股卡号，直接用"沪市B886100491"命名
+        //   v20260904-06: 【提速】横屏文档优先试270°(上部在左边的常见方向)，命中即停不再试其他方向；横屏OCR从5次降到2-3次
+        const ENGINE_FINGERPRINT = 'v20260904-06';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+270°优先方向检测+完整页面OCR+股卡号兜底命名+2字垃圾拦截+确认单关键词 + 不可信层兜底屏蔽)`);
 
         // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
         const inputCjkDensity = cjkDensity(pdfTextLines);
