@@ -5165,9 +5165,10 @@
         //   v20260904-05: 股卡号兜底命名：标题提取失败时，若OCR识别到沪市/深市股卡号，直接用"沪市B886100491"命名
         //   v20260904-06: 横屏文档优先试270°(上部在左边的常见方向)，命中即停不再试其他方向
         //   v20260904-07: 取消完整页面OCR提速；股卡号优先命名提前到关键词匹配之前
-        //   v20260904-08: 【加固】股卡号识别：1)非数字上限从20→30字符  2)新增格式特征匹配(B+9位/0+9位+市场关键词)  3)逐行+全文双重扫描  4)新增调试日志确认匹配过程
-        const ENGINE_FINGERPRINT = 'v20260904-08';
-        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+270°优先方向检测+股卡号逐行+全文双扫描+格式特征兜底匹配+2字垃圾拦截+确认单关键词)`);
+        //   v20260904-08: 股卡号识别加固-逐行+全文双扫描+格式特征Bd9兜底匹配
+        //   v20260904-09: 【修复】股卡号命名跳过universalCleanTitle(该函数会去掉字母+6位以上数字,导致"沪市B886100491"→"沪市")
+        const ENGINE_FINGERPRINT = 'v20260904-09';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+270°优先方向检测+股卡号逐行+全文双扫描+格式特征兜底匹配+股卡号命名跳过字母数字清理+2字垃圾拦截+确认单关键词)`);
 
         // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
         const inputCjkDensity = cjkDensity(pdfTextLines);
@@ -5282,16 +5283,23 @@
           t = t.replace(/[及和与或]\s*[一-龥]{1,2}$/, '');
           return t.trim();
         }
-        finalTitle = universalCleanTitle(finalTitle);
+        // 股卡号命名(沪市B886100491/深市0806020123)跳过 universalCleanTitle
+        // 该函数会去掉所有字母和6位以上数字(清理身份证/流水号用)，但会把账号也清掉
+        const isStockAcctTitle = /(?:沪市|深市)[A-Za-z0-9]{6,14}$/.test(finalTitle);
+        if (!isStockAcctTitle) {
+          finalTitle = universalCleanTitle(finalTitle);
+        }
 
         // 清理标题
         finalTitle = finalTitle
           .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s（）【】\-]/g, ' ')
           .replace(/\s+/g, ' ')
           .trim();
-        finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-        finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-        finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
+        if (!isStockAcctTitle) {
+          finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+          finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+          finalTitle = finalTitle.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
+        }
         finalTitle = finalTitle.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
 
         // 最后：追加备案编码
