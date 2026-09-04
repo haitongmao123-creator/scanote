@@ -1,9 +1,71 @@
 // 模拟 index.html 中的核心函数用于本地测试（与 index.html 同步）
 
-function extractTitleFromOCRText(text) {
-  if (!text || text.trim().length === 0) return '';
+function extractTitleFromOCRText(text, inputCjkDensity) {
+  if (!text || text.trim().length === 0) return { title: '', source: '空' };
+
+  const cjkCount = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const nonSpaceCount = text.replace(/\s/g, '').length;
+  const cjkDensityVal = typeof inputCjkDensity === 'number' ? inputCjkDensity : (nonSpaceCount > 0 ? cjkCount / nonSpaceCount : 0);
+  if (cjkDensityVal < 0.15) return { title: '', source: '乱码(CJK密度过低)' };
 
   const rawKeywords = [
+    // === 量化私募基金账户运营岗位专用词库（与 index.html TITLE_KEYWORDS 同步）===
+    '银行账户开户申请书', '银行账户变更申请书', '银行账户销户申请书', '银行账户销户申请',
+    '基本存款账户开户许可证', '一般存款账户开户许可证', '专用账户开户许可证', '开户许可证',
+    '期货账户开户申请表', '期货账户变更申请表', '期货账户销户申请表', '期货账户销户申请书',
+    '期货资金账户开户', '期货资金账户变更', '期货资金账户销户', '期货资金账号开户',
+    '证券账户开户申请表', '证券账户变更申请表', '证券账户注销申请表', '证券账户注册申请',
+    '证券账户变更注册', '中登账户开户', '中登账户变更', '证券账户开户',
+    '基金账户开户申请', '基金账户销户申请', '基金账户变更申请', '基金账户开户',
+    '托管账户开户申请', '托管账户销户申请', '托管资金账户开户', '托管资金账户销户',
+    '资金账户开户申请', '资金账户销户申请', '资金账户变更申请', '资金账户开户',
+    '交易账户开户申请', '交易账户销户申请', '交易账户变更申请', '交易账户开户',
+    '企业网银开户申请', '企业网银变更申请', '企业网银注销申请', '网银开户申请', '网银变更申请',
+    '第三方存管协议', '三方存管协议', '三方存管申请', '三方存管确认',
+    '银证转账协议', '银期转账协议', '银衍转账协议', '银行存管协议',
+    '资金存管协议', '资金监管协议', '存管协议', '监管协议',
+    '银期转账开户申请', '银证转账开户申请', '银衍转账开户申请',
+    '银期转账变更申请', '银证转账变更申请',
+    '资金划转申请书', '资金划拨申请书', '资金调拨申请书', '资金划转申请',
+    '资金划转指令', '资金划拨指令', '划款指令', '划款申请书',
+    '出金申请书', '入金申请书', '出入金申请', '出金申请', '入金申请',
+    '银行汇款申请书', '电汇申请书', '转账申请书', '汇款申请书',
+    '资金转出申请', '资金转入申请', '资金转出申请书', '资金转入申请书',
+    '出金指令', '入金指令', '提款申请', '存款申请',
+    '银行账户对账单', '银行对账单', '银行流水', '银行账户流水',
+    '期货资金对账单', '期货交易结算单', '期货对账单', '期货结算单',
+    '证券资金对账单', '证券交易对账单', '证券对账单',
+    '资金余额对账单', '资金余额确认单', '资金对账单',
+    '持仓对账单', '持仓明细表', '持仓余额表',
+    '账户余额确认单', '账户余额确认', '账户余额表', '账户余额证明',
+    '交易明细表', '交易流水表', '资金流水表', '资金明细表', '资金余额表',
+    '资金日报', '资金月报', '账户日报', '账户月报', '账户年报',
+    '结算单', '结算报表', '清算单', '对账确认单', '对账回执', '对账函', '对账单',
+    '开户受理回执', '开户回执', '销户回执', '变更回执', '业务回执', '受理回执', '办理回执',
+    '开户确认书', '销户确认书', '变更确认书',
+    '开户确认函', '销户确认函', '变更确认函',
+    '资金到账确认书', '资金到账确认', '资金到账回执', '资金到账通知',
+    '划款回执', '汇款回执', '转账回执',
+    '交易确认书', '交易确认单', '成交确认书', '成交确认单',
+    '法人授权委托书', '经办人授权委托书', '授权委托书',
+    '印鉴变更申请书', '印鉴备案', '预留印鉴', '印鉴卡',
+    '密码重置申请', '密码解锁申请', '密码变更申请',
+    '数字证书申请', '数字证书协议', '证书变更申请', '证书吊销申请', '电子签名协议',
+    '网银盾申请', 'Ukey申请', 'U盾申请',
+    '基本存款账户开户许可证', '私募基金管理人登记证明', '经营证券期货业务许可证',
+    '产品备案证明', '基金业协会备案', '私募基金备案证明',
+    '法人身份证明', '经办人身份证明', '授权人身份证明',
+    '开户证明', '销户证明', '账户证明', '资金证明', '余额证明', '存款证明', '资金余额证明',
+    '账户冻结通知', '账户解冻通知', '账户休眠通知', '账户激活通知', '账户异常通知',
+    '账户变更通知', '开户通知', '销户通知',
+    '资金到账通知', '资金划转通知', '划款通知',
+    '到期通知', '续约通知', '解约通知',
+    '银行通知函', '期货公司通知函', '券商通知函',
+    '变更申请书', '注销申请书', '撤销申请书',
+    '账户信息变更表', '信息变更申请', '资料变更申请',
+    '业务申请表', '业务办理表', '受理表', '备案登记表', '备案表',
+    '回执', '流水', '存管', '汇款', '调拨', '划转', '转账协议',
+
     '承诺书和风险提示书', '承诺书和风险揭示书',
     '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
     '证券账户业务申请表', '基金账户业务申请表', '账户业务申请表',
@@ -86,14 +148,25 @@ function extractTitleFromOCRText(text) {
 
   // === 1. 跨行长关键词匹配（>=6字）===
   for (let i = 0; i < searchRange - 1; i++) {
-    let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+    let lineA = stripLine(lines[i]);
+    let lineB = stripLine(lines[i + 1]);
+    let combined = lineA + lineB;
     if (combined.length < 4 || combined.length > 120) continue;
     for (const kw of keywords) {
       if (kw.length < 6) continue;
       if (combined.includes(kw)) {
-        let beforeKw = combined.substring(0, combined.indexOf(kw));
-        let title = kw;
-        if (isMeaningfulPrefix(beforeKw)) title = combined.substring(0, combined.indexOf(kw) + kw.length);
+        let kwIdx = combined.indexOf(kw);
+        let beforeKw = combined.substring(0, kwIdx);
+        let title;
+        if (isMeaningfulPrefix(beforeKw) || beforeKw.length === 0) {
+          title = combined.substring(0, kwIdx + kw.length);
+        } else {
+          title = kw;
+        }
+        if (beforeKw.length === 0 && kwIdx + kw.length < lineA.length) {
+          const m = lineA.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,20})/);
+          if (m) title += m[1];
+        }
         title = cleanTitle(title);
         if (isValidTitle(title)) return { title, source: `跨行长词[${i+1}+${i+2}] kw=${kw}` };
       }
@@ -102,14 +175,21 @@ function extractTitleFromOCRText(text) {
 
   // === 1.5 跨行短关键词 + 有意义前缀（<=5字）===
   for (let i = 0; i < searchRange - 1; i++) {
-    let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+    let lineA = stripLine(lines[i]);
+    let lineB = stripLine(lines[i + 1]);
+    let combined = lineA + lineB;
     if (combined.length < 6 || combined.length > 120) continue;
     for (const kw of keywords) {
       if (kw.length > 5 || kw.length < 2) continue;
       if (combined.includes(kw)) {
-        let beforeKw = combined.substring(0, combined.indexOf(kw));
-        if (!isMeaningfulPrefix(beforeKw)) continue;
-        let title = combined.substring(0, combined.indexOf(kw) + kw.length);
+        let kwIdx = combined.indexOf(kw);
+        let beforeKw = combined.substring(0, kwIdx);
+        if (!(isMeaningfulPrefix(beforeKw) || beforeKw.length === 0)) continue;
+        let title = combined.substring(0, kwIdx + kw.length);
+        if (beforeKw.length === 0 && kwIdx + kw.length < lineA.length) {
+          const m = lineA.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,20})/);
+          if (m) title += m[1];
+        }
         title = cleanTitle(title);
         if (isValidTitle(title)) return { title, source: `跨行短词+前缀[${i+1}+${i+2}] kw=${kw}` };
       }
@@ -123,9 +203,18 @@ function extractTitleFromOCRText(text) {
     for (const kw of keywords) {
       if (kw.length <= 2 && i >= 5) continue;
       if (stripped.includes(kw)) {
-        let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-        let title = kw;
-        if (isMeaningfulPrefix(beforeKw)) title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+        let kwIdx = stripped.indexOf(kw);
+        let beforeKw = stripped.substring(0, kwIdx);
+        let title;
+        if (isMeaningfulPrefix(beforeKw) || beforeKw.length === 0) {
+          title = stripped.substring(0, kwIdx + kw.length);
+        } else {
+          title = kw;
+        }
+        if (beforeKw.length === 0 && kwIdx + kw.length < stripped.length) {
+          const m = stripped.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,25})/);
+          if (m) title += m[1];
+        }
         title = cleanTitle(title);
         if (isValidTitle(title)) return { title, source: `单行[${i+1}] kw=${kw}` };
       }
@@ -140,9 +229,14 @@ function extractTitleFromOCRText(text) {
       if (kw.length > 5 || kw.length < 2) continue;
       if (kw.length <= 2 && i >= 5) continue;
       if (stripped.includes(kw)) {
-        let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-        if (!isMeaningfulPrefix(beforeKw)) continue;
-        let title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+        let kwIdx = stripped.indexOf(kw);
+        let beforeKw = stripped.substring(0, kwIdx);
+        if (!(isMeaningfulPrefix(beforeKw) || beforeKw.length === 0)) continue;
+        let title = stripped.substring(0, kwIdx + kw.length);
+        if (beforeKw.length === 0 && kwIdx + kw.length < stripped.length) {
+          const m = stripped.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,25})/);
+          if (m) title += m[1];
+        }
         title = cleanTitle(title);
         if (isValidTitle(title)) return { title, source: `单行短词+前缀[${i+1}] kw=${kw}` };
       }
@@ -162,6 +256,8 @@ function extractTitleFromOCRText(text) {
     if (/^(根据|依据|按照|为了|为进一步|鉴于|经研究|现通知|现公告|现函|尊敬的|各部门|各营业部|客户|股东|全体|地址|电话|传真|邮编|邮箱|联系人|基金类型|基金名称|管理人|托管人|法定代表人|执行事务合伙人)/.test(stripped)) continue;
     let cleaned = cleanTitle(stripped);
     if (!isValidTitle(cleaned)) continue;
+    // 【扫描件乱码防护】：只有 2 个汉字的行必须是文档型后缀结尾，否则"全区/人员/办公"这类乱码两字词会误当标题
+    if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
     let score = 0;
     if (cleaned.length >= 4 && cleaned.length <= 50) score += 50;
     if (cleaned.length >= 10 && cleaned.length <= 40) score += 20;
@@ -175,6 +271,8 @@ function extractTitleFromOCRText(text) {
   // === 4. 最终回退 ===
   for (const line of lines) {
     let cleaned = cleanTitle(line);
+    // 两字非文档后缀词也拦截
+    if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
     if (isValidTitle(cleaned) && cleaned.length > 2 && cleaned.length < 80) {
       return { title: cleaned, source: '最终回退' };
     }

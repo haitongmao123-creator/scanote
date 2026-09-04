@@ -4353,7 +4353,58 @@
       if (worker) _workerQueue.push(worker);
     }
 
-    // OCR识别（扫描型PDF）- 仅识别上半部分提升速度
+    // 旋转canvas（仅支持90/180/270度顺时针），返回新canvas
+    function rotateCanvas(srcCanvas, degrees) {
+      const swap = (degrees === 90 || degrees === 270);
+      const w = swap ? srcCanvas.height : srcCanvas.width;
+      const h = swap ? srcCanvas.width : srcCanvas.height;
+      const out = document.createElement('canvas');
+      out.width = w;
+      out.height = h;
+      const c = out.getContext('2d');
+      c.translate(w / 2, h / 2);
+      c.rotate((degrees * Math.PI) / 180);
+      c.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
+      return out;
+    }
+
+    // 裁剪canvas顶部指定比例，返回新canvas
+    function cropTopCanvas(srcCanvas, ratio) {
+      const h = Math.max(1, Math.floor(srcCanvas.height * ratio));
+      const out = document.createElement('canvas');
+      out.width = srcCanvas.width;
+      out.height = h;
+      const c = out.getContext('2d');
+      c.drawImage(srcCanvas, 0, 0, srcCanvas.width, h, 0, 0, srcCanvas.width, h);
+      return out;
+    }
+
+    // 评估OCR文本质量得分：中文汉字数 + 命中关键词加权（用于判断方向是否正确）
+    // 引入CJK密度检测：横向/旋转扫描件在错误方向下会输出大量ASCII乱码夹杂少量随机汉字，
+    // 需通过CJK密度区分正确方向与错误方向
+    function scoreOCRText(text) {
+      if (!text) return 0;
+      const cjk = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+      const totalNonSpace = text.replace(/\s/g, '').length;
+      const cjkRatio = totalNonSpace > 0 ? cjk / totalNonSpace : 0;
+      let kwScore = 0;
+      let longKwScore = 0;
+      const kws = [...TITLE_KEYWORDS, ...(state.config.customKeywords || [])];
+      for (const kw of kws) {
+        if (kw.length >= 3 && text.includes(kw)) {
+          kwScore += kw.length * 2;
+          if (kw.length >= 6) longKwScore += kw.length * 2;
+        }
+      }
+      // CJK密度低于30%时（疑似方向错误）：短关键词在乱码中易误匹配，不予采信；
+      // 仅长关键词（>=6字）保留部分分（长词在乱码中随机命中概率极低）
+      if (cjkRatio < 0.30) {
+        return Math.floor(longKwScore * 0.5);
+      }
+      return cjk + kwScore;
+    }
+
+    // OCR识别（扫描型PDF）- 支持横向/旋转扫描件的自动方向检测
     async function performOCR(typedarray) {
       try {
         // 关键保险：复制独立副本，Tesseract Worker postMessage会用Transferable detach传入的buffer
@@ -4363,48 +4414,88 @@
         const pdf = await pdfjsLib.getDocument(safeData).promise;
         const page = await pdf.getPage(1);
 
-        const scale = 1.0;
-        const viewport = page.getViewport({ scale });
-        const fullHeight = viewport.height;
-        // 只识别上方部分（前30%高度），标题一定在顶部
-        const cropHeight = Math.floor(fullHeight * 0.30);
-
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.height = cropHeight;
-        canvas.width = viewport.width;
-
-        // 渲染时裁剪到上半部分
-        await page.render({
-          canvasContext: context,
-          viewport: viewport,
-          transform: (scale !== 1) ? [scale, 0, 0, scale, 0, 0] : undefined,
-          clip: { x: 0, y: 0, width: viewport.width, height: cropHeight }
-        }).promise;
-        addDebugInfo('🖼️ 渲染页面（上半部分）', `${canvas.width}x${canvas.height}`);
-
-        addDebugInfo('🔍 启动本地OCR', '识别第1页上半部分...');
-
-        // 从Worker池获取，用完归还
-        const worker = await getOCRWorker();
-        let result;
-        try {
-          result = await worker.recognize(canvas);
-        } finally {
-          releaseOCRWorker(worker);
+        // 渲染分辨率：scale=2.0 约等于 144dpi，大幅提升小字/盖章区域 OCR 准确率；
+        // 若渲染后任一维度超过 3000px（超大页面），按比例缩放到 3000px 避免显存/Worker 超时。
+        let scale = 2.0;
+        let viewport = page.getViewport({ scale });
+        const MAX_DIM = 3000;
+        const maxDim = Math.max(viewport.width, viewport.height);
+        if (maxDim > MAX_DIM) {
+          scale *= MAX_DIM / maxDim;
+          viewport = page.getViewport({ scale });
         }
 
-        let pageText = result.data.text || '';
-        pageText = pageText.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
-        // 去掉中文之间的空格
-        pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-        pageText = pageText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
-        pageText = pageText.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
-        pageText = pageText.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
+        // 渲染整页到canvas（用于后续方向检测与旋转重试）
+        const fullCanvas = document.createElement('canvas');
+        const fullCtx = fullCanvas.getContext('2d');
+        fullCanvas.width = viewport.width;
+        fullCanvas.height = viewport.height;
+        await page.render({
+          canvasContext: fullCtx,
+          viewport: viewport
+        }).promise;
+        addDebugInfo('🖼️ 渲染页面', `${fullCanvas.width}x${fullCanvas.height}`);
 
-        addDebugInfo('📝 OCR结果(清理后)', pageText.slice(0, 300));
+        // 文本清理（与原逻辑保持一致）
+        const cleanText = (t) => {
+          t = t.replace(/[|｜]/g, '').replace(/\n{3,}/g, '\n\n').trim();
+          // 去掉中文之间的空格
+          t = t.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+          t = t.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2');
+          t = t.replace(/([\u4e00-\u9fa5])\s+(\d)/g, '$1$2');
+          t = t.replace(/(\d)\s+([\u4e00-\u9fa5])/g, '$1$2');
+          return t;
+        };
 
-        return pageText;
+        // OCR一个canvas（含Worker池借还）
+        const ocrCanvas = async (canvas) => {
+          const worker = await getOCRWorker();
+          try {
+            const r = await worker.recognize(canvas);
+            return r.data.text || '';
+          } finally {
+            releaseOCRWorker(worker);
+          }
+        };
+
+        // 1) 快速路径：顶部30%按原方向识别（竖向文档命中此路径，性能与原版一致）
+        addDebugInfo('🔍 启动本地OCR', '识别第1页上半部分（0°）...');
+        let bestText = cleanText(await ocrCanvas(cropTopCanvas(fullCanvas, 0.30)));
+        let bestScore = scoreOCRText(bestText);
+        addDebugInfo('📝 OCR结果(0°)', bestText.slice(0, 120) + ` [得分${bestScore}]`);
+
+        // 2) 若0°方向文字过少（疑似横向/旋转扫描件），按90°/270°/180°重试，取最优
+        const ORIENTATION_THRESHOLD = 8; // 低于此分视为方向错误
+        if (bestScore < ORIENTATION_THRESHOLD) {
+          addDebugInfo('🔄 竖向识别文字过少', '疑似横向/旋转扫描件，尝试旋转重试...');
+          for (const deg of [90, 270, 180]) {
+            try {
+              const rot = rotateCanvas(fullCanvas, deg);
+              // 旋转后标题仍位于顶部：取顶部 50%（进一步放宽，应对大边距、印章压顶等情况）
+              const cand = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.50)));
+              const sc = scoreOCRText(cand);
+              addDebugInfo(`🔄 OCR结果(${deg}°)`, cand.slice(0, 120) + ` [得分${sc}]`);
+              if (sc > bestScore) {
+                bestScore = sc;
+                bestText = cand;
+              }
+              if (sc >= ORIENTATION_THRESHOLD * 2) break; // 已足够好，提前结束
+            } catch (e) {
+              addDebugInfo(`⚠️ 旋转${deg}°识别失败`, e.message);
+            }
+          }
+          addDebugInfo('✅ 方向检测完成', `最佳得分${bestScore}`);
+        }
+
+        // 所有方向得分均低于阈值，返回空串避免乱码提取标题
+        if (bestScore < ORIENTATION_THRESHOLD) {
+          addDebugInfo('⚠️ OCR结果可信度低', `最佳得分${bestScore} < 阈值${ORIENTATION_THRESHOLD}，放弃OCR结果`);
+          return '';
+        }
+
+        addDebugInfo('📝 OCR结果(清理后)', bestText.slice(0, 300));
+
+        return bestText;
       } catch (err) {
         addDebugInfo('❌ OCR失败', err.message);
         throw err;
@@ -4413,6 +4504,73 @@
 
     // 标题关键词（模块级常量，extractTitleFromOCRText 和 universalCleanTitle 共用，避免两份列表不同步）
     const TITLE_KEYWORDS = [
+        // === 量化私募基金账户运营岗位专用词库（账户开立/变更/销户、资金划转、对账、回执、印鉴证书等）===
+        // 账户开立/变更/销户类
+        '银行账户开户申请书', '银行账户变更申请书', '银行账户销户申请书', '银行账户销户申请',
+        '基本存款账户开户许可证', '一般存款账户开户许可证', '专用账户开户许可证', '开户许可证',
+        '期货账户开户申请表', '期货账户变更申请表', '期货账户销户申请表', '期货账户销户申请书',
+        '期货资金账户开户', '期货资金账户变更', '期货资金账户销户', '期货资金账号开户',
+        '证券账户开户申请表', '证券账户变更申请表', '证券账户注销申请表', '证券账户注册申请',
+        '证券账户变更注册', '中登账户开户', '中登账户变更', '证券账户开户',
+        '基金账户开户申请', '基金账户销户申请', '基金账户变更申请', '基金账户开户',
+        '托管账户开户申请', '托管账户销户申请', '托管资金账户开户', '托管资金账户销户',
+        '资金账户开户申请', '资金账户销户申请', '资金账户变更申请', '资金账户开户',
+        '交易账户开户申请', '交易账户销户申请', '交易账户变更申请', '交易账户开户',
+        '企业网银开户申请', '企业网银变更申请', '企业网银注销申请', '网银开户申请', '网银变更申请',
+        // 转账/存管协议类
+        '第三方存管协议', '三方存管协议', '三方存管申请', '三方存管确认',
+        '银证转账协议', '银期转账协议', '银衍转账协议', '银行存管协议',
+        '资金存管协议', '资金监管协议', '存管协议', '监管协议',
+        '银期转账开户申请', '银证转账开户申请', '银衍转账开户申请',
+        '银期转账变更申请', '银证转账变更申请',
+        // 资金划转/出入金类
+        '资金划转申请书', '资金划拨申请书', '资金调拨申请书', '资金划转申请',
+        '资金划转指令', '资金划拨指令', '划款指令', '划款申请书',
+        '出金申请书', '入金申请书', '出入金申请', '出金申请', '入金申请',
+        '银行汇款申请书', '电汇申请书', '转账申请书', '汇款申请书',
+        '资金转出申请', '资金转入申请', '资金转出申请书', '资金转入申请书',
+        '出金指令', '入金指令', '提款申请', '存款申请',
+        // 对账/报表类
+        '银行账户对账单', '银行对账单', '银行流水', '银行账户流水',
+        '期货资金对账单', '期货交易结算单', '期货对账单', '期货结算单',
+        '证券资金对账单', '证券交易对账单', '证券对账单',
+        '资金余额对账单', '资金余额确认单', '资金对账单',
+        '持仓对账单', '持仓明细表', '持仓余额表',
+        '账户余额确认单', '账户余额确认', '账户余额表', '账户余额证明',
+        '交易明细表', '交易流水表', '资金流水表', '资金明细表', '资金余额表',
+        '资金日报', '资金月报', '账户日报', '账户月报', '账户年报',
+        '结算单', '结算报表', '清算单', '对账确认单', '对账回执', '对账函', '对账单',
+        // 回执/确认类
+        '开户受理回执', '开户回执', '销户回执', '变更回执', '业务回执', '受理回执', '办理回执',
+        '开户确认书', '销户确认书', '变更确认书',
+        '开户确认函', '销户确认函', '变更确认函',
+        '资金到账确认书', '资金到账确认', '资金到账回执', '资金到账通知',
+        '划款回执', '汇款回执', '转账回执',
+        '交易确认书', '交易确认单', '成交确认书', '成交确认单',
+        // 授权/印鉴/证书类
+        '法人授权委托书', '经办人授权委托书', '授权委托书',
+        '印鉴变更申请书', '印鉴备案', '预留印鉴', '印鉴卡',
+        '密码重置申请', '密码解锁申请', '密码变更申请',
+        '数字证书申请', '数字证书协议', '证书变更申请', '证书吊销申请', '电子签名协议',
+        '网银盾申请', 'Ukey申请', 'U盾申请',
+        // 证明/资质类
+        '基本存款账户开户许可证', '私募基金管理人登记证明', '经营证券期货业务许可证',
+        '产品备案证明', '基金业协会备案', '私募基金备案证明',
+        '法人身份证明', '经办人身份证明', '授权人身份证明',
+        '开户证明', '销户证明', '账户证明', '资金证明', '余额证明', '存款证明', '资金余额证明',
+        // 通知/函件类
+        '账户冻结通知', '账户解冻通知', '账户休眠通知', '账户激活通知', '账户异常通知',
+        '账户变更通知', '开户通知', '销户通知',
+        '资金到账通知', '资金划转通知', '划款通知',
+        '到期通知', '续约通知', '解约通知',
+        '银行通知函', '期货公司通知函', '券商通知函',
+        // 申请表通用类
+        '变更申请书', '注销申请书', '撤销申请书',
+        '账户信息变更表', '信息变更申请', '资料变更申请',
+        '业务申请表', '业务办理表', '受理表', '备案登记表', '备案表',
+        // 通用短词（放最后，作为兜底匹配）
+        '回执', '流水', '存管', '汇款', '调拨', '划转', '转账协议',
+
         '承诺书和风险提示书', '承诺书和风险揭示书',
         '接入外部信息系统承诺书和风险提示书', '接入外部信息系统承诺书和风险揭示书',
         '信息系统外部接入承诺函及风险揭示书', '信息系统外部接入承诺函及风险提示书',
@@ -4467,7 +4625,7 @@
     }
 
     // 从OCR文本中提取标题
-    function extractTitleFromOCRText(text) {
+    function extractTitleFromOCRText(text, inputCjkDensity) {
       if (!text || text.trim().length === 0) return '';
 
       // 合并内置关键词和用户自定义关键词
@@ -4478,6 +4636,20 @@
       const searchRange = Math.min(lines.length, 15);
 
       addDebugInfo('🔍 OCR前15行', lines.slice(0, 15).map((l, i) => `[${i+1}] ${l}`).join(' | '));
+
+      // 计算 CJK 密度（兼容老调用者不传）
+      const cjkCount = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+      const nonSpaceCount = text.replace(/\s/g, '').length;
+      const cjkDensityVal = typeof inputCjkDensity === 'number' ? inputCjkDensity : (nonSpaceCount > 0 ? cjkCount / nonSpaceCount : 0);
+
+      // 【乱码绝对拒绝（深度防御）】：若传入文本自身 CJK 密度<15%，说明整段内容绝大部分
+      // 是 ASCII 乱码。即使前面四道关键词匹配都侥幸通过（几乎不可能），或有人绕过了
+      // "不可信文本层跳过"的闸门，这里也强制返回空，绝不允许回退评分从乱码里挑出
+      // "全区"、"办公"等两字随机词。随后上层会自动走"元数据→文件名"兜底链。
+      if (cjkDensityVal < 0.15) {
+        addDebugInfo('🛑 输入文本乱码', `CJK密度仅${(cjkDensityVal*100).toFixed(1)}% < 15%，拒绝提取，交由元数据/文件名兜底`);
+        return '';
+      }
 
       // 剥离前缀（版本号、编号、备案编码等）
       // 注意：码值部分限定 [A-Za-z0-9\-]{0,30}（字母数字/连字符，≤30位），禁止贪婪吞掉后面的中文标题内容
@@ -4557,17 +4729,29 @@
 
       // === 1. 前15行，先尝试跨行合并匹配（更长关键词更精准，优先）===
       for (let i = 0; i < searchRange - 1; i++) {
-        let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+        let lineA = stripLine(lines[i]);
+        let lineB = stripLine(lines[i + 1]);
+        let combined = lineA + lineB;
         if (combined.length < 4 || combined.length > 120) continue;
 
         for (const kw of keywords) {
           if (kw.length < 6) continue; // 跨行只匹配较长关键词（>=6字）
           if (combined.includes(kw)) {
-            let beforeKw = combined.substring(0, combined.indexOf(kw));
-            let title = kw;
-            // 保留前缀的条件：意义明确，且非标签类垃圾
-            if (isMeaningfulPrefix(beforeKw)) {
-              title = combined.substring(0, combined.indexOf(kw) + kw.length);
+            let kwIdx = combined.indexOf(kw);
+            let beforeKw = combined.substring(0, kwIdx);
+            let title;
+            if (isMeaningfulPrefix(beforeKw) || beforeKw.length === 0) {
+              title = combined.substring(0, kwIdx + kw.length);
+            } else {
+              title = kw;
+            }
+            // 跨行情况：仅在关键词完全位于 lineA（或 lineA+lineB 边界处）时，
+            // 允许把 lineA 中 kw 之后的内容追加，但绝不越过 lineA 的结尾进入 lineB 的区域
+            // （因为 lineB 里可能是正文，如"尊敬的管理人"会被误串入）
+            if (beforeKw.length === 0 && kwIdx + kw.length < lineA.length) {
+              const afterInA = lineA.substring(kwIdx + kw.length);
+              const tailMatch = afterInA.match(/^([\u4e00-\u9fa5]{1,20})/);
+              if (tailMatch) title += tailMatch[1];
             }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
@@ -4580,17 +4764,26 @@
 
       // === 1.5 跨行短关键词 + 有意义前缀（如：关于XX的通知/2024年度审计报告，这类跨两行且关键词短于6字的）===
       for (let i = 0; i < searchRange - 1; i++) {
-        let combined = stripLine(lines[i]) + stripLine(lines[i + 1]);
+        let lineA = stripLine(lines[i]);
+        let lineB = stripLine(lines[i + 1]);
+        let combined = lineA + lineB;
         if (combined.length < 6 || combined.length > 120) continue;
 
         for (const kw of keywords) {
           if (kw.length > 5) continue; // 只匹配短关键词（<=5字），长关键词已经在上一步处理
           if (kw.length < 2) continue;
           if (combined.includes(kw)) {
-            let beforeKw = combined.substring(0, combined.indexOf(kw));
-            // 只有前缀有意义才保留（关于...的/年份/文号）
-            if (!isMeaningfulPrefix(beforeKw)) continue;
-            let title = combined.substring(0, combined.indexOf(kw) + kw.length);
+            let kwIdx = combined.indexOf(kw);
+            let beforeKw = combined.substring(0, kwIdx);
+            // 只有前缀有意义才保留（关于...的/年份/文号）；如果前缀为空也认为合理（短关键词本身开头的情况）
+            if (!(isMeaningfulPrefix(beforeKw) || beforeKw.length === 0)) continue;
+            let title = combined.substring(0, kwIdx + kw.length);
+            // 同上：跨行时只在 lineA 范围内追加，不允许越过 lineA 结尾吃到 lineB
+            if (beforeKw.length === 0 && kwIdx + kw.length < lineA.length) {
+              const afterInA = lineA.substring(kwIdx + kw.length);
+              const tailMatch = afterInA.match(/^([\u4e00-\u9fa5]{1,20})/);
+              if (tailMatch) title += tailMatch[1];
+            }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
               addDebugInfo('✅ 跨行短词匹配', `行${i+1}+${i+2} → kw=${kw} → ${title}`);
@@ -4609,10 +4802,19 @@
           // 超短关键词（≤2字）只在前5行匹配，防止正文中的"公告/通知/报告/函"等词被误当标题
           if (kw.length <= 2 && i >= 5) continue;
           if (stripped.includes(kw)) {
-            let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-            let title = kw;
-            if (isMeaningfulPrefix(beforeKw)) {
-              title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+            let kwIdx = stripped.indexOf(kw);
+            let beforeKw = stripped.substring(0, kwIdx);
+            let title;
+            if (isMeaningfulPrefix(beforeKw) || beforeKw.length === 0) {
+              title = stripped.substring(0, kwIdx + kw.length);
+            } else {
+              title = kw;
+            }
+            // 关键词在整行最左侧时，说明此行就是标题行本身，应尽可能保留关键词后到结尾的中文后缀
+            if (beforeKw.length === 0 && kwIdx + kw.length < stripped.length) {
+              const after = stripped.substring(kwIdx + kw.length);
+              const tailMatch = after.match(/^([\u4e00-\u9fa5]{1,25})/);
+              if (tailMatch) title += tailMatch[1];
             }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
@@ -4632,9 +4834,14 @@
           // 超短关键词（≤2字）只在前5行匹配，防止正文干扰
           if (kw.length <= 2 && i >= 5) continue;
           if (stripped.includes(kw)) {
-            let beforeKw = stripped.substring(0, stripped.indexOf(kw));
-            if (!isMeaningfulPrefix(beforeKw)) continue;
-            let title = stripped.substring(0, stripped.indexOf(kw) + kw.length);
+            let kwIdx = stripped.indexOf(kw);
+            let beforeKw = stripped.substring(0, kwIdx);
+            if (!(isMeaningfulPrefix(beforeKw) || beforeKw.length === 0)) continue;
+            let title = stripped.substring(0, kwIdx + kw.length);
+            if (beforeKw.length === 0 && kwIdx + kw.length < stripped.length) {
+              const tailMatch = stripped.substring(kwIdx + kw.length).match(/^([\u4e00-\u9fa5]{1,25})/);
+              if (tailMatch) title += tailMatch[1];
+            }
             title = cleanTitle(title);
             if (isValidTitle(title)) {
               addDebugInfo('✅ 单行短词+前缀', `行${i+1} → kw=${kw} → ${title}`);
@@ -4664,6 +4871,11 @@
         let cleaned = cleanTitle(stripped);
         if (!isValidTitle(cleaned)) continue;
 
+        // 【扫描件乱码防护】：当回退选中的"最佳行"只有 2 个汉字时，
+        // 必须是"文档型后缀"结尾的词（如通知书、申请表、协议）才允许返回，
+        // 否则像"全区"、"人员"这种从乱码里挑出的两字随机词会被误当作标题。
+        if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
+
         let score = 0;
         if (cleaned.length >= 4 && cleaned.length <= 50) score += 50;
         if (cleaned.length >= 10 && cleaned.length <= 40) score += 20;
@@ -4685,6 +4897,8 @@
       // === 4. 最终回退 ===
       for (const line of lines) {
         let cleaned = cleanTitle(line);
+        // 同上：最终回退也拦一下两字非文档词（避免最末兜底也出垃圾）
+        if (cleaned.length === 2 && !/[书表告函知议明同托诺证约章定卡案令]$/.test(cleaned)) continue;
         if (isValidTitle(cleaned) && cleaned.length > 2 && cleaned.length < 80) return cleaned;
       }
       return '';
@@ -4801,10 +5015,27 @@
           addDebugInfo('❌ 文本提取错误', err.message);
         }
 
-        // 2.5 文本层为空（扫描型PDF），启动OCR识别
+        // 2.5 文本层质量检测 + OCR识别
+        // 扫描仪经常会把低质量 OCR 结果嵌入 PDF 文本层（全是英文乱码 + 零星汉字），
+        // 导致原逻辑误判为"文本型 PDF"，直接跳过我们自己的 OCR + 方向检测流程，
+        // 最终把乱码喂给标题提取，回退机制挑出"全区"这种看似正常的两字垃圾词。
+        function cjkDensity(text) {
+          if (!text) return 0;
+          const cjk = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+          const totalNonSpace = text.replace(/\s/g, '').length;
+          return totalNonSpace > 0 ? cjk / totalNonSpace : 0;
+        }
+        const textLayerDensity = cjkDensity(pdfTextLines);
+        const textLayerTrustworthy = textBlocksCount > 0 && pdfTextLines && pdfTextLines.trim().length > 0 && textLayerDensity >= 0.18;
+        const needOCR = !textLayerTrustworthy;
+
         let ocrText = '';
-        if (textBlocksCount === 0 || !pdfTextLines || pdfTextLines.trim().length === 0) {
-          addDebugInfo('🔎 检测到扫描型PDF', '文字层为空，启动本地OCR识别');
+        if (needOCR) {
+          if (textBlocksCount === 0 || !pdfTextLines || pdfTextLines.trim().length === 0) {
+            addDebugInfo('🔎 检测到扫描型PDF', '文字层为空，启动本地OCR识别');
+          } else {
+            addDebugInfo('⚠️ 文本层疑似扫描件乱码', `CJK密度${(textLayerDensity*100).toFixed(0)}% < 18%，放弃文本层，启动本地OCR识别（含方向自动检测）`);
+          }
           try {
             // 关键：给performOCR传独立副本（防止extractRawTextFromPDF已detach底层buffer）
             const ocrBufferCopy = new Uint8Array(
@@ -4813,6 +5044,12 @@
             ocrText = await performOCR(ocrBufferCopy);
             if (ocrText) {
               addDebugInfo('📝 OCR文本', ocrText.slice(0, 300));
+            } else {
+              addDebugInfo('⚠️ OCR层无结果', '所有方向得分均低于阈值，OCR返回空串');
+              // OCR 也拿不出有效内容时，回退使用原文本层（即使是乱码也比完全空强，避免全靠文件名）
+              if (pdfTextLines && pdfTextLines.trim().length > 0) {
+                addDebugInfo('♻️ 文本层降级兜底', 'OCR无有效结果，回退使用文本层内容作为最后手段');
+              }
             }
           } catch (ocrErr) {
             addDebugInfo('❌ OCR识别失败', ocrErr.message);
@@ -4820,11 +5057,27 @@
         }
 
         // === 3. 统一走成熟的extractTitleFromOCRText处理标题 ===
-        // 优先级：文本层（更准，更快） >  OCR层
-        const rawTextForExtract = pdfTextLines || ocrText;
+        // 标题识别引擎指纹（版本号）。用户看调试区第一行若找不到此指纹 = 浏览器缓存了旧HTML！
+        //   v20260903-01: CJK密度检测(18%)+scale=2.0+2字垃圾词拦截+方向重试(50%裁剪)+关键词后缀扩展
+        //   v20260903-02: 【新增】禁止OCR失败后fallback回不可信文本层；传入CJK密度到提取函数，拒绝喂乱码给回退
+        const ENGINE_FINGERPRINT = 'v20260903-02';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+2字垃圾拦截+OCR方向重试 scale=2.0 + 关键词后缀扩展 + 不可信层兜底屏蔽)`);
+
+        // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
+        const inputCjkDensity = cjkDensity(pdfTextLines);
+        addDebugInfo('📊 文本层CJK密度', `${(inputCjkDensity*100).toFixed(1)}% (阈值 >= 18% 才信任文本层)`);
+
+        // 优先级：可信文本层（>=18% CJK）> OCR层。
+        // 注意：不可信文本层（<18% CJK 的乱码层）绝不再作为 fallback，否则直接把乱码
+        // （哪怕OCR层也没结果）喂给标题提取函数，回退评分仍可能挑出"全区"这类两字垃圾词。
+        // 缺失时宁可直接空字符串，随后走【元数据 → 文件名】兜底链更安全。
+        const rawTextForExtract = (textLayerTrustworthy ? pdfTextLines : null) || ocrText || '';
+        if (!textLayerTrustworthy && pdfTextLines && !ocrText) {
+          addDebugInfo('🛑 跳过不可信文本层', `CJK密度${(inputCjkDensity*100).toFixed(1)}% 且 OCR 也无结果，禁止用乱码文本层提取标题，改走元数据/文件名兜底`);
+        }
         let extractedTitle = '';
         if (rawTextForExtract) {
-          extractedTitle = extractTitleFromOCRText(rawTextForExtract);
+          extractedTitle = extractTitleFromOCRText(rawTextForExtract, cjkDensity(rawTextForExtract));
           addDebugInfo('🏷️ 关键词提取标题', extractedTitle || '未匹配到关键词');
         }
 
