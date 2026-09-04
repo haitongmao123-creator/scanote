@@ -4481,14 +4481,14 @@
         addDebugInfo('🔍 启动本地OCR', '识别第1页上半部分（0°）...');
         let bestText = cleanText(await ocrCanvas(cropTopCanvas(fullCanvas, 0.30)));
         let bestScore = scoreOCRText(bestText);
-        let bestHasVocab = hasDocumentVocab(bestText); // 文档词组命中：真正可读的金融文档必然含"申请/开户/通知/账户"等组合词
+        let bestHasVocab = hasDocumentVocab(bestText);
+        let bestDeg = 0; // 记录最佳方向角度，用于后续完整页面OCR
         addDebugInfo('📝 OCR结果(0°)', bestText.slice(0, 120) + ` [得分${bestScore}, 词组${bestHasVocab ? '✓' : '✗'}]`);
 
         // 2) 方向检测触发条件（满足任一即重试）：
         //    a) 得分低于阈值（传统文字过少判定）
-        //    b) 得分虽高但不含任何文档词组 → 伪汉字乱码（横屏文档被竖向OCR会凑出较高CJK密度与偶发长关键词命中，
-        //       但几乎不会凑出"申请/开户/通知/账户"这类2字组合词）
-        const ORIENTATION_THRESHOLD = 8; // 低于此分视为方向错误
+        //    b) 得分虽高但不含任何文档词组 → 伪汉字乱码
+        const ORIENTATION_THRESHOLD = 8;
         const needRotateRetry = bestScore < ORIENTATION_THRESHOLD || !bestHasVocab;
         if (needRotateRetry) {
           if (!bestHasVocab && bestScore >= ORIENTATION_THRESHOLD) {
@@ -4496,38 +4496,16 @@
           } else {
             addDebugInfo('🔄 竖向识别文字过少', '疑似横向/旋转扫描件，尝试旋转重试...');
           }
-          // 始终遍历所有方向（不提前break）：横屏扫描件的标题可能落在90°/270°的任一"边"上，
-          // 某方向虽然能识别出正文表格（得分高），但另一方向才真正把标题放在裁剪区内。
-          // 每个方向尝试两边裁剪：先裁"顶部"70%，再裁"底部"70%（=从对侧裁，取同比例），
-          // 组合覆盖标题可能出现的所有边缘位置，避免漏识别。
+          // 方向检测阶段：每个方向裁剪顶部50%做1次快速OCR（只用于判断方向，不用于标题提取）
+          // 遍历全部3方向，选含文档词组且得分最高的方向
           for (const deg of [90, 270, 180]) {
             try {
               const rot = rotateCanvas(fullCanvas, deg);
-              // 裁顶部 70%：正常文档旋转后标题在顶部的情况
-              const candTop = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.70)));
-              const scTop = scoreOCRText(candTop);
-              const cvTop = hasDocumentVocab(candTop);
-              addDebugInfo(`🔄 OCR结果(${deg}° 顶70%)`, candTop.slice(0, 120) + ` [得分${scTop}, 词组${cvTop ? '✓' : '✗'}]`);
-              // 裁底部 70%：旋转后标题落在"底部"边的情况（如本用户案例：标题在原图左侧，顺时针90°后标题落在底部边）
-              const w = rot.width, h = rot.height;
-              const botCanvas = document.createElement('canvas');
-              const botCtx = botCanvas.getContext('2d');
-              const botH = Math.ceil(h * 0.70);
-              botCanvas.width = w;
-              botCanvas.height = botH;
-              botCtx.drawImage(rot, 0, h - botH, w, botH, 0, 0, w, botH);
-              const candBot = cleanText(await ocrCanvas(botCanvas));
-              const scBot = scoreOCRText(candBot);
-              const cvBot = hasDocumentVocab(candBot);
-              addDebugInfo(`🔄 OCR结果(${deg}° 底70%)`, candBot.slice(0, 120) + ` [得分${scBot}, 词组${cvBot ? '✓' : '✗'}]`);
-              // 选择本方向内 top 与 bot 中更优的结果（同规则：含词组优先，其次得分）
-              let cand, sc, cv;
-              const botBetterThanTop = cvBot && !cvTop ? true
-                                     : cvBot === cvTop && scBot > scTop ? true
-                                     : false;
-              if (botBetterThanTop) { cand = candBot; sc = scBot; cv = cvBot; }
-              else                   { cand = candTop; sc = scTop; cv = cvTop; }
-              // 与全局最佳比较
+              const cand = cleanText(await ocrCanvas(cropTopCanvas(rot, 0.50)));
+              const sc = scoreOCRText(cand);
+              const cv = hasDocumentVocab(cand);
+              addDebugInfo(`🔄 OCR结果(${deg}° 顶50%)`, cand.slice(0, 120) + ` [得分${sc}, 词组${cv ? '✓' : '✗'}]`);
+              // 选最优：优先选"含文档词组"的方向；同词组状态下取高分
               const better = cv && !bestHasVocab ? true
                            : cv === bestHasVocab && sc > bestScore ? true
                            : false;
@@ -4535,12 +4513,13 @@
                 bestScore = sc;
                 bestText = cand;
                 bestHasVocab = cv;
+                bestDeg = deg;
               }
             } catch (e) {
               addDebugInfo(`⚠️ 旋转${deg}°识别失败`, e.message);
             }
           }
-          addDebugInfo('✅ 方向检测完成', `最佳得分${bestScore}, 词组${bestHasVocab ? '✓' : '✗'}`);
+          addDebugInfo('✅ 方向检测完成', `最佳方向${bestDeg}°, 得分${bestScore}, 词组${bestHasVocab ? '✓' : '✗'}`);
         }
 
         // 所有方向得分均低于阈值，返回空串避免乱码提取标题
@@ -4550,11 +4529,28 @@
         }
 
         // 最终防护：若所有方向都不含任何文档词组（bestHasVocab=false），
-        // 说明整页OCR都是伪汉字乱码（横屏文档所有方向都没识别对），直接放弃OCR结果，
-        // 交由上层走【元数据 → 文件名】兜底链，避免把乱码喂给标题提取。
+        // 说明整页OCR都是伪汉字乱码，直接放弃OCR结果，交由上层走【元数据 → 文件名】兜底链。
         if (!bestHasVocab) {
           addDebugInfo('⚠️ OCR全方向均无文档词组', '4个方向识别结果均不含任何文档常用词组，判定为整页乱码，放弃OCR结果');
           return '';
+        }
+
+        // 3) 标题提取阶段：对正确方向做完整页面OCR（不裁剪，确保标题在识别范围内）
+        //    方向检测阶段的裁剪50%可能把标题裁掉了（横屏文档标题可能在页面任一边缘），
+        //    所以对确定的最佳方向重新做一次完整页面OCR，拿到全页文本用于标题提取。
+        //    竖向文档（bestDeg=0）的0°裁剪30%已含标题，无需重复OCR。
+        if (bestDeg !== 0) {
+          addDebugInfo('📄 完整页面OCR', `对最佳方向${bestDeg}°做完整页面识别（不裁剪），确保标题区域在识别范围内...`);
+          try {
+            const rotFull = rotateCanvas(fullCanvas, bestDeg);
+            const fullPageText = cleanText(await ocrCanvas(rotFull));
+            if (fullPageText && fullPageText.length > bestText.length) {
+              addDebugInfo('📝 完整页面OCR结果', fullPageText.slice(0, 200) + ` [${fullPageText.length}字]`);
+              bestText = fullPageText;
+            }
+          } catch (e) {
+            addDebugInfo('⚠️ 完整页面OCR失败', e.message + '（沿用方向检测阶段的裁剪结果）');
+          }
         }
 
         addDebugInfo('📝 OCR结果(清理后)', bestText.slice(0, 300));
@@ -5138,9 +5134,10 @@
         //   v20260903-02: 【新增】禁止OCR失败后fallback回不可信文本层；传入CJK密度到提取函数，拒绝喂乱码给回退
         //   v20260904-01: 【新增】文档词组闸门：回退评分前要求OCR全文含至少一个文档常用词组(申请/开户/通知/账户等)，拦截伪汉字乱码
         //   v20260904-02: 【新增】OCR方向检测联动文档词组：0°得分虽高但无文档词组也强制旋转重试；全方向均无词组则放弃OCR结果
-        //   v20260904-03: 【核心】旋转重试遍历全部3方向+每方向顶/底双侧70%裁剪(覆盖横屏标题任一边)；新增"证券账户开户办理确认单"等确认单关键词
-        const ENGINE_FINGERPRINT = 'v20260904-03';
-        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+方向全遍历+双侧70%裁剪+2字垃圾拦截+OCR方向重试 scale=2.0 + 确认单关键词补全 + 不可信层兜底屏蔽)`);
+        //   v20260904-03: 旋转重试遍历全部3方向+每方向顶/底双侧70%裁剪；新增确认单关键词
+        //   v20260904-04: 【重构】方向检测(裁剪50%快速判断)与标题提取(完整页面OCR不裁剪)分离；横屏文档5次OCR(比7次快)，完整页面确保标题在识别范围内
+        const ENGINE_FINGERPRINT = 'v20260904-04';
+        addDebugInfo('🧠 标题识别引擎版本', `${ENGINE_FINGERPRINT} (CJK密度检测+文档词组闸门+方向检测与标题提取分离+完整页面OCR+2字垃圾拦截+确认单关键词 + 不可信层兜底屏蔽)`);
 
         // 传入文本层CJK密度，让提取函数本身也能拒绝喂乱码
         const inputCjkDensity = cjkDensity(pdfTextLines);
